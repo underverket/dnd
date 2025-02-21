@@ -1,3 +1,127 @@
+# import network
+# import time
+# import urequests
+# import os
+# import machine
+
+# # 📌 Your Wi-Fi credentials
+# SSID = "The Force"
+# PASSWORD = "wonderwork"
+
+# # 📌 GitHub Firmware Info
+# CURRENT_VERSION = "1.0.1"
+# FIRMWARE_JSON_URL = "http://raw.githubusercontent.com/underverket/dnd/main/firmware.json"
+
+# def connect_wifi():
+#     """ Connect to Wi-Fi """
+#     wlan = network.WLAN(network.STA_IF)
+#     wlan.active(True)
+#     wlan.config(pm=0xa11140)  # Disable power-saving mode
+
+#     # Disconnect first (fixes unstable reconnects)
+#     wlan.disconnect()
+#     time.sleep(1)
+
+#     print("🔍 Connecting to Wi-Fi...")
+#     wlan.connect(SSID, PASSWORD)
+
+#     timeout = 10  # Max wait time (seconds)
+#     start_time = time.time()
+
+#     while not wlan.isconnected():
+#         if time.time() - start_time > timeout:
+#             print("❌ Wi-Fi connection timeout! Retrying...")
+#             wlan.disconnect()
+#             time.sleep(1)
+#             wlan.connect(SSID, PASSWORD)
+#             start_time = time.time()
+#         time.sleep(1)
+
+#     print("✅ Connected!")
+#     print("Network config:", wlan.ifconfig())
+
+# # 📌 Call function
+# connect_wifi()
+
+# def check_for_update():
+#     """ Check GitHub for firmware updates """
+#     try:
+#         print("🔍 Fetching firmware.json from GitHub...")
+#         response = urequests.get(FIRMWARE_JSON_URL)
+#         if response.status_code == 200:
+#             update_info = response.json()
+#             response.close()
+
+#             latest_version = update_info["version"]
+#             download_url = update_info["url"]
+
+#             print(f"📌 Current Version: {CURRENT_VERSION}")
+#             print(f"📢 Latest Version: {latest_version}")
+
+#             if latest_version > CURRENT_VERSION:
+#                 print("🚀 New update available! Downloading...")
+#                 return download_url
+#             else:
+#                 print("✅ Already up to date!")
+#                 return None
+#         else:
+#             print(f"❌ HTTP Error: {response.status_code}")
+#             response.close()
+#             return None
+#     except Exception as e:
+#         print("❌ Update check failed:", e)
+#         return None
+
+# def download_firmware(url):
+#     """ Download new firmware file """
+#     try:
+#         print(f"🌎 Downloading firmware from {url}...")
+#         response = urequests.get(url)
+#         if response.status_code == 200:
+#             new_code = response.text
+#             response.close()
+#             return new_code
+#         else:
+#             print(f"❌ HTTP Error {response.status_code}")
+#             response.close()
+#             return None
+#     except Exception as e:
+#         print("❌ Download failed:", e)
+#         return None
+
+# def install_update(new_code):
+#     """ Save new firmware and reboot """
+#     try:
+#         # Backup old firmware
+#         try:
+#             os.remove("main.py.bak")
+#         except OSError:
+#             pass  # No previous backup
+
+#         os.rename("main.py", "main.py.bak")
+
+#         # Write new firmware
+#         with open("main.py", "w") as f:
+#             f.write(new_code)
+
+#         print("✅ Update installed! Rebooting now...")
+#         time.sleep(2)
+
+#         machine.reset()  # Reboot the Pico W
+
+#     except Exception as e:
+#         print("❌ Installation failed:", e)
+
+# # 📌 Perform OTA Update
+# update_url = check_for_update()
+# if update_url:
+#     new_firmware = download_firmware(update_url)
+#     if new_firmware:
+#         install_update(new_firmware)
+
+# Uncomment to test local server (after running `python3 -m http.server 8080` on your PC)
+# test_local_server()
+
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                                                                              ║
@@ -5,170 +129,36 @@
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
-# Over the air
+import random
 import network
 import urequests
-import json
-import os
-
 import machine
 import neopixel
 import time
-import random
-
-
-# Version control
-CURRENT_VERSION = "1.0.1"
-GITHUB_USER = "underverket"
-GITHUB_REPO = "dnd"
-UPDATE_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
-
-def show_update_animation():
-    """Show a spinning animation during update"""
-    positions = [
-        (3,3), (3,4), (4,4), (4,3)  # Center square positions
-    ]
-    np.fill((0, 0, 0))  # Clear display
-    
-    for pos in positions:
-        np[get_pixel_index(*pos)] = (0, 0, int(255 * BRIGHTNESS))  # Blue dots
-    np.write()
-    time.sleep(0.1)
-
-def connect_wifi():
-    """Connect to WiFi using credentials from wifi_config.py"""
-    try:
-        from wifi_config import WIFI_SSID, WIFI_PASSWORD
-        wlan = network.WLAN(network.STA_IF)
-        wlan.active(True)
-        
-        print('Connecting to WiFi...')
-        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-        
-        # Wait for connection with timeout
-        max_wait = 10
-        while max_wait > 0:
-            if wlan.status() < 0 or wlan.status() >= 3:
-                break
-            max_wait -= 1
-            print('Waiting for connection...')
-            time.sleep(1)
-
-        # Handle connection result
-        if wlan.status() != 3:
-            print('Network connection failed!')
-            return False
-            
-        print('Connected!')
-        print('Network config:', wlan.ifconfig())
-        return True
-        
-    except ImportError:
-        print("WiFi configuration not found!")
-        return False
-    except Exception as e:
-        print("WiFi connection failed:", e)
-        return False
-
-def check_for_update():
-    """Check if there's a new firmware version available"""
-    try:
-        print("Checking for updates...")
-        response = urequests.get(UPDATE_URL)
-        update_info = json.loads(response.text)
-        response.close()
-        
-        print(f"Current version: {CURRENT_VERSION}")
-        print(f"Latest version: {update_info['version']}")
-        
-        if update_info['version'] > CURRENT_VERSION:
-            print("New version available!")
-            return update_info['url']
-        print("Already on latest version")
-        return None
-    except Exception as e:
-        print("Failed to check for updates:", e)
-        return None
-
-def download_and_install_update(url):
-    """Download and install new firmware with visual feedback"""
-    try:
-        # Show downloading animation
-        np.fill((0, 0, 0))
-        for row in range(8):
-            for col in range(8):
-                np[get_pixel_index(row, col)] = (0, 0, int(50 * BRIGHTNESS))  # Dim blue background
-        np.write()
-        
-        print("Downloading new firmware...")
-        response = urequests.get(url)
-        
-        # Show progress
-        np.fill((0, 0, 0))
-        for row in range(8):
-            for col in range(8):
-                np[get_pixel_index(row, col)] = (0, int(50 * BRIGHTNESS), 0)  # Dim green background
-        np.write()
-        
-        # Save the new firmware
-        with open('main.py.new', 'w') as f:
-            f.write(response.text)
-        response.close()
-        
-        # Show installing animation
-        np.fill((0, 0, 0))
-        for row in range(8):
-            for col in range(8):
-                np[get_pixel_index(row, col)] = (int(50 * BRIGHTNESS), int(50 * BRIGHTNESS), 0)  # Dim yellow background
-        np.write()
-        
-        # Backup old firmware and install new
-        try:
-            os.remove('main.py.bak')  # Remove previous backup if it exists
-        except:
-            pass
-            
-        os.rename('main.py', 'main.py.bak')
-        os.rename('main.py.new', 'main.py')
-        
-        # Show success animation
-        np.fill((0, int(255 * BRIGHTNESS), 0))  # Bright green flash
-        np.write()
-        print("Update successful! Rebooting...")
-        time.sleep(1)
-        
-        # Clear display before reboot
-        np.fill((0, 0, 0))
-        np.write()
-        time.sleep(0.5)
-        
-        machine.reset()
-        
-    except Exception as e:
-        print("Update failed:", e)
-        # Show error animation
-        for _ in range(3):  # Flash red 3 times
-            np.fill((int(255 * BRIGHTNESS), 0, 0))
-            np.write()
-            time.sleep(0.2)
-            np.fill((0, 0, 0))
-            np.write()
-            time.sleep(0.2)
-            
-        # Try to restore old file if new one was renamed
-        try:
-            if 'main.py.bak' in os.listdir():
-                os.remove('main.py')
-                os.rename('main.py.bak', 'main.py')
-        except:
-            pass
-
+import json
+import os
 
 """
 ┌──────────────────────────────────────────────────────────────────┐
 │ CONFIGURATION AND INITIALIZATION                                  │
 └──────────────────────────────────────────────────────────────────┘
 """
+
+# Load Wi-Fi credentials from `wifi_config.py`
+try:
+    from wifi_config import WIFI_SSID, WIFI_PASSWORD
+    print(f"🔍 Loaded Wi-Fi config - SSID: {WIFI_SSID}")
+except ImportError:
+    print("❌ Wi-Fi configuration not found! Please create `wifi_config.py` with `WIFI_SSID` and `WIFI_PASSWORD`.")
+    WIFI_SSID = None
+    WIFI_PASSWORD = None
+
+# GitHub OTA Update Configuration
+CURRENT_VERSION = "1.0.2"
+GITHUB_USER = "underverket"
+GITHUB_REPO = "dnd"
+UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
+
 LED_PIN = 0
 BUTTON_PIN = 10
 NUM_LEDS = 64
@@ -181,6 +171,123 @@ POMODORO_IDLE_TIMEOUT = 5000  # 5 seconds in milliseconds
 # Initialize hardware
 np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
 button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
+
+"""
+┌──────────────────────────────────────────────────────────────────┐
+│ UPDATE FUNCTIONS                                                 │
+└──────────────────────────────────────────────────────────────────┘
+"""
+def show_update_animation():
+    """Show an animation while checking for updates."""
+    # np.fill((0, 0, int(50 * BRIGHTNESS)))  # Dim blue
+    np.fill((int(255 * BRIGHTNESS), int(105 * BRIGHTNESS), int(180 * BRIGHTNESS)))  # Pink (RGB: 255, 105, 180)
+    np.write()
+
+def lan_connect():
+    """Connect to Wi-Fi with credentials from wifi_config.py"""
+    if not WIFI_SSID or not WIFI_PASSWORD:
+        print("❌ No Wi-Fi credentials found! Skipping Wi-Fi connection.")
+        return False
+
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.config(pm=0xa11140)  # Disable power-saving mode
+
+    # Ensure a clean connection
+    wlan.disconnect()
+    time.sleep(1)
+
+    print("🔍 Connecting to Wi-Fi...")
+    wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+
+    timeout = 10  # Max wait time (seconds)
+    start_time = time.time()
+
+    while not wlan.isconnected():
+        if time.time() - start_time > timeout:
+            print("❌ Wi-Fi connection timeout! Retrying...")
+            wlan.disconnect()
+            time.sleep(1)
+            wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+            start_time = time.time()  # Reset timeout timer
+        time.sleep(1)
+
+    if wlan.isconnected():
+        print("✅ Connected!")
+        print("Network config:", wlan.ifconfig())
+        return True
+    else:
+        print("❌ Wi-Fi connection failed.")
+        return False
+
+
+def fetch_github_raw():
+    """Fetch firmware.json from GitHub."""
+    try:
+        print(f"🌍 Fetching firmware.json from {UPDATE_URL}...")
+        response = urequests.get(UPDATE_URL)
+        if response.status_code == 200:
+            content = response.text
+            response.close()
+            return content.strip()
+        else:
+            print(f"❌ HTTP Error {response.status_code}")
+            response.close()
+            return None
+    except Exception as e:
+        print(f"❌ Request failed: {e}")
+        return None
+
+def check_for_update():
+    """Check if there's a new firmware version available."""
+    try:
+        content = fetch_github_raw()
+        if content:
+            update_info = json.loads(content)
+            print(f"🔍 Current Version: {CURRENT_VERSION}")
+            print(f"🚀 Latest Version: {update_info['version']}")
+
+            if update_info['version'] > CURRENT_VERSION:
+                print("🔄 New version available!")
+                return update_info['url']
+            print("✅ Already up to date!")
+        return None
+    except Exception as e:
+        print(f"❌ Update check failed: {e}")
+        return None
+
+def download_and_install_update(url):
+    """Download new firmware, install, and reboot."""
+    try:
+        print("⬇️ Downloading new firmware...")
+        response = urequests.get(url)
+        if response.status_code == 200:
+            content = response.text
+            response.close()
+
+            print("💾 Saving new firmware...")
+            with open('main.py.new', 'w') as f:
+                f.write(content)
+
+            # Backup old firmware and install new
+            try:
+                os.remove('main.py.bak')  # Remove previous backup if it exists
+            except:
+                pass
+
+            os.rename('main.py', 'main.py.bak')
+            os.rename('main.py.new', 'main.py')
+
+            print("✅ Update successful! Rebooting...")
+            time.sleep(1)
+            machine.reset()
+
+        else:
+            print(f"❌ HTTP Error {response.status_code}")
+            response.close()
+
+    except Exception as e:
+        print(f"❌ Update failed: {e}")
 
 """
 ┌──────────────────────────────────────────────────────────────────┐
@@ -897,17 +1004,32 @@ rainbow_active = False
 rainbow_offset = 0
 long_press_handled = False
 
+def initialize_with_timeout():
+    """Initialize Wi-Fi and check for updates before starting the main loop."""
+    print(f"🔵 Starting LED Matrix Controller v{CURRENT_VERSION}")
+    
+    show_update_animation()
+
+    try:
+        lan_connect()  # Connect to Wi-Fi
+        
+        # Try to fetch update info
+        update_url = check_for_update()
+        
+        if update_url:
+            download_and_install_update(update_url)
+    except Exception as e:
+        print(f"❌ Initialization error: {e}")
+    
+    clear_display()
+    print("🎭 Starting LED animations...")
+
+# Run initialization sequence
+initialize_with_timeout()
+
 # Show initial intro
 simple_mode_show_intro()
 show_ghost((0, 255, 0))  # Start with green ghost
-
-
-# Initialize system and check for updates
-print(f"Starting LED Matrix Controller v{CURRENT_VERSION}")
-if connect_wifi():
-    update_url = check_for_update()
-    if update_url:
-        download_and_install_update(update_url)
 
 
 try:
