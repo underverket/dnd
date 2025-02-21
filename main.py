@@ -18,10 +18,22 @@ import random
 
 
 # Version control
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.1"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
+
+def show_update_animation():
+    """Show a spinning animation during update"""
+    positions = [
+        (3,3), (3,4), (4,4), (4,3)  # Center square positions
+    ]
+    np.fill((0, 0, 0))  # Clear display
+    
+    for pos in positions:
+        np[get_pixel_index(*pos)] = (0, 0, int(255 * BRIGHTNESS))  # Blue dots
+    np.write()
+    time.sleep(0.1)
 
 def connect_wifi():
     """Connect to WiFi using credentials from wifi_config.py"""
@@ -79,15 +91,36 @@ def check_for_update():
         return None
 
 def download_and_install_update(url):
-    """Download and install new firmware"""
+    """Download and install new firmware with visual feedback"""
     try:
+        # Show downloading animation
+        np.fill((0, 0, 0))
+        for row in range(8):
+            for col in range(8):
+                np[get_pixel_index(row, col)] = (0, 0, int(50 * BRIGHTNESS))  # Dim blue background
+        np.write()
+        
         print("Downloading new firmware...")
         response = urequests.get(url)
+        
+        # Show progress
+        np.fill((0, 0, 0))
+        for row in range(8):
+            for col in range(8):
+                np[get_pixel_index(row, col)] = (0, int(50 * BRIGHTNESS), 0)  # Dim green background
+        np.write()
         
         # Save the new firmware
         with open('main.py.new', 'w') as f:
             f.write(response.text)
         response.close()
+        
+        # Show installing animation
+        np.fill((0, 0, 0))
+        for row in range(8):
+            for col in range(8):
+                np[get_pixel_index(row, col)] = (int(50 * BRIGHTNESS), int(50 * BRIGHTNESS), 0)  # Dim yellow background
+        np.write()
         
         # Backup old firmware and install new
         try:
@@ -98,11 +131,30 @@ def download_and_install_update(url):
         os.rename('main.py', 'main.py.bak')
         os.rename('main.py.new', 'main.py')
         
+        # Show success animation
+        np.fill((0, int(255 * BRIGHTNESS), 0))  # Bright green flash
+        np.write()
         print("Update successful! Rebooting...")
         time.sleep(1)
+        
+        # Clear display before reboot
+        np.fill((0, 0, 0))
+        np.write()
+        time.sleep(0.5)
+        
         machine.reset()
+        
     except Exception as e:
         print("Update failed:", e)
+        # Show error animation
+        for _ in range(3):  # Flash red 3 times
+            np.fill((int(255 * BRIGHTNESS), 0, 0))
+            np.write()
+            time.sleep(0.2)
+            np.fill((0, 0, 0))
+            np.write()
+            time.sleep(0.2)
+            
         # Try to restore old file if new one was renamed
         try:
             if 'main.py.bak' in os.listdir():
@@ -856,7 +908,7 @@ if connect_wifi():
     update_url = check_for_update()
     if update_url:
         download_and_install_update(update_url)
-        
+
 
 try:
     while True:
