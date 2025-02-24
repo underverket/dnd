@@ -1,1233 +1,1090 @@
 """
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║                    DO NOT DISTURB - LED MATRIX CONTROLLER                    ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+LED Matrix Controller - Example with Small State Classes
 """
-import random
 import network
 import urequests
-import neopixel
-import machine
-import time
-import math
-import json
 import os
+import machine
+import neopixel
+import time
+import json
+import random
 
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ CONFIGURATION AND INITIALIZATION                                 │
-└──────────────────────────────────────────────────────────────────┘
-"""
-# State tracking for the main program / screens.
-class State:
-    DEFAULT = "default"
-    CHARACTERS = "characters"
-    POMODORO = "pomodoro"
-    
-    class Default:
-        AVAILABLE = "available"
-        BUSY = "busy"
-        SOCIAL = "social"
-
-current_state = State.DEFAULT
-status_state = State.Default.AVAILABLE
-
-# Button state tracking.
-button_state = {
-    "pressed": False,
-    "press_start": None,
-    "long_press_handled": False,
-    "last_release_time": 0,
-    "ignore_next_release": False
-}
-
-# Characters.
-CHARACTERS_DATA = [
-    {
-        "id": "ghost",
-        "name": "Pac-Man Ghost",
-        "body": [
-            (0, 2), (0, 3), (0, 4), (0, 5),
-            (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (1, 6),
-            (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7),
-            (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7),
-            (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7),
-            (5, 0), (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (5, 6), (5, 7),
-            (6, 0), (6, 1), (6, 2), (6, 3), (6, 4), (6, 5), (6, 6), (6, 7),
-            (7, 0), (7, 2), (7, 4), (7, 6),
-        ],
-        "eyes": [
-            (4, 2), (4, 5), (5, 2), (5, 5)
-        ],
-    },
-    {
-        "id": "invader",
-        "name": "Space Invader",
-        "body": [
-            (0, 3), (0, 4),
-            (1, 2), (1, 3), (1, 4), (1, 5),
-            (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6),
-            (3, 0), (3, 1), (3, 3), (3, 4), (3, 6), (3, 7),
-            (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7),
-            (5, 2), (5, 5),
-            (6, 1), (6, 6),
-            (7, 0), (7, 7)
-        ],
-        "eyes": [
-            (2, 2), (2, 5)
-        ],
-    },
-    {
-        "id": "smiley",
-        "name": "Smiley Face",
-        "body": [
-            (1, 2), (1, 3), (1, 4), (1, 5),
-            (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6),
-            (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7),
-            (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7),
-            (5, 1), (5, 2), (5, 3), (5, 4), (5, 5), (5, 6),
-            (6, 2), (6, 3), (6, 4), (6, 5)
-        ],
-        "eyes": [
-            (3, 2), (3, 5)
-        ],
-    },
-    {
-        "id": "heart",
-        "name": "Heart",
-        "body": [
-            (1, 1), (1, 2), (1, 5), (1, 6),
-            (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7),
-            (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7),
-            (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6),
-            (5, 2), (5, 3), (5, 4), (5, 5),
-            (6, 3), (6, 4)
-        ],
-        "eyes": []
-    },
-]
-
-# Hardware Configuration.
+# --------------------------------------------------------------------------------
+# Hardware Configuration
+# --------------------------------------------------------------------------------
 LED_PIN = 0
 BUTTON_PIN = 10
 NUM_LEDS = 64
+BRIGHTNESS = 0.1
 
-# Timing Configuration.
-FRAME_DELAY = 0.01
-LONG_PRESS_TIME = 700
-POMODORO_IDLE_TIMEOUT = 5000
-UPDATE_CHECK_TIME = 5000
-WIFI_CONNECT_ATTEMPTS = 2    # Initial attempt + 2 retries
-WIFI_TIMEOUT_SECONDS = 5    # Seconds to wait before timeout
-
-# Brightness Configuration.
-BRIGHTNESS = {
-    'MAIN': 0.15,             # Main brightness factor
-    'BACKGROUND': 0.02,       # Background dim level
-    'PREVIEW': 0.05,          # Preview brightness
-    'QUARTER': 0.15,          # Quarter hour dots
-    'HOUR': 0.2,              # Hour dots
-    'BORDER_IDLE': 0.07,      # Idle border brightness (for pomodoro)
-    'BORDER_ACTIVE': 0.4,     # Active border brightness (for pomodoro)
-}
-
-# Animation.
-animation_blink_time = time.ticks_ms() + random.randint(4000, 10000)
-animation_is_blinking = False
-animation_blink_start_time = 0
-
-# Unsure:
-rainbow_offset = 0
-
-# Initialize hardware.
-np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
-button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ Characters                                                       │
-└──────────────────────────────────────────────────────────────────┘
-"""
-def find_char_index_by_id(char_id):
-    """
-    Return the index of CHARACTERS_DATA whose 'id' matches 'char_id'.
-    If not found, return None.
-    """
-    for i, cdata in enumerate(CHARACTERS_DATA):
-        if cdata["id"] == char_id:
-            return i
-    return None
-
-# Load the selected character from a JSON file.
-def read_char_conf():
-    """
-    Read the saved character ID from 'char_config.json',
-    find its index in CHARACTERS_DATA, and return that index.
-    If anything goes wrong or ID not found, return 0.
-    """
-    try:
-        with open("char_config.json", "r") as f:
-            saved_id = json.load(f)  # e.g. "ghost", "invader", etc.
-        idx = find_char_index_by_id(saved_id)
-        if idx is not None:
-            return idx
-        else:
-            return 0  # Fallback if the ID doesn't match any character
-    except:
-        # File missing or invalid JSON
-        return 0
-    
-# Set the selected character.
-selected_character = read_char_conf()
-
-# Ensure the selected character is within bounds, just in case.
-if selected_character < 0 or selected_character >= len(CHARACTERS_DATA):
-    selected_character = 0
-
-def get_current_character_data():
-    """Return the dictionary ('body', 'eyes', etc.) for the selected character index."""
-    if selected_character < 0 or selected_character >= len(CHARACTERS_DATA):
-        return CHARACTERS_DATA[0]  # Fallback if out of range
-    return CHARACTERS_DATA[selected_character]
-
-# Save the selected character to a JSON file.
-def save_character_config(char_index):
-    """
-    Saves the stable 'id' of the selected character to 'char_config.json'
-    instead of the numeric index.
-    """
-    try:
-        char_id = CHARACTERS_DATA[char_index]["id"]
-        with open("char_config.json", "w") as f:
-            json.dump(char_id, f)
-        return True
-    except Exception as e:
-        print(f"Failed to save character config: {e}")
-        return False
-
-def preview_char(index):
-    render_char((255, 0, 128), time.ticks_ms())  # Pink color (full red, no green, half blue)
-    char_name = CHARACTERS_DATA[index]["name"]
-    print(f"Character Selected: {char_name}")
-
-
-def render_char(color, current_time):
-    global animation_blink_time, animation_is_blinking, animation_blink_start_time
-    
-    # 1. Fetch the data directly from CHARACTERS_DATA
-    char_data = get_current_character_data()
-    character_body = char_data["body"]
-    character_eyes = char_data["eyes"]
-    
-    # 2. Same drawing logic as before
-    np.fill((0, 0, 0))
-    adjusted_color = adjust_color(color)
-
-    # Draw body
-    for (row, col) in character_body:
-        np[get_pixel_index(row, col)] = adjusted_color
-
-    # 3. Handle blinking eyes if present
-    if character_eyes:
-        # The same blink logic you already had...
-        if not animation_is_blinking and time.ticks_diff(current_time, animation_blink_time) >= 0:
-            animation_is_blinking = True
-            animation_blink_start_time = current_time
-        
-        if animation_is_blinking:
-            blink_cycle = (time.ticks_diff(current_time, animation_blink_start_time) // 30)
-            if blink_cycle >= 8:
-                # End blink
-                animation_is_blinking = False
-                animation_blink_time = current_time + random.randint(4000, 10000)
-                for (row, col) in character_eyes:
-                    np[get_pixel_index(row, col)] = EYE_COLOR
-            else:
-                if blink_cycle < 2 or blink_cycle >= 6:
-                    for (row, col) in character_eyes:
-                        np[get_pixel_index(row, col)] = EYE_COLOR
-                elif blink_cycle < 4:
-                    # If you want that "bottom row of eyes" effect, keep it:
-                    base_row = character_eyes[0][0]
-                    for (row, col) in character_eyes:
-                        if row == base_row + 1:
-                            np[get_pixel_index(row, col)] = EYE_COLOR
-        else:
-            # Normal eyes
-            for (row, col) in character_eyes:
-                np[get_pixel_index(row, col)] = EYE_COLOR
-    
-    np.write()
-
-EYE_COLOR = (
-    int(255 * BRIGHTNESS['MAIN']), 
-    int(255 * BRIGHTNESS['MAIN']), 
-    int(255 * BRIGHTNESS['MAIN'])
-)
-
-def render_char_rainbow(offset, current_time=None):
-    # 1. Get the current character data
-    char_data = get_current_character_data()
-    character_body = char_data["body"]
-    character_eyes = char_data["eyes"]
-    
-    # 2. Clear the display
-    np.fill((0, 0, 0))
-
-    # 3. Draw rainbow body
-    for row in range(8):
-        row_color = wheel((offset + row * 8) % 255)
-        for col in range(8):
-            if (row, col) in character_body:
-                np[get_pixel_index(row, col)] = row_color
-    
-    # 4. Eyes (if any)
-    if character_eyes:
-        for (row, col) in character_eyes:
-            np[get_pixel_index(row, col)] = EYE_COLOR
-    
-    np.write()
-
-def slide_in_char():
-    ANIMATION_STEPS = 8
-    STEP_DELAY = 0.05
-    
-    # 1. Get the current character's body & eyes:
-    char_data = get_current_character_data()
-    char_body = char_data["body"]
-    char_eyes = char_data["eyes"]
-    
-    # 2. Slide-up animation
-    for step in range(ANIMATION_STEPS + 1):
-        np.fill((0, 0, 0))
-        
-        # Start from 8 rows below the visible area, move to final
-        offset = ANIMATION_STEPS - step
-        
-        # Body
-        for (row, col) in char_body:
-            new_row = row + offset
-            if 0 <= new_row < 8:
-                np[get_pixel_index(new_row, col)] = (0, int(255 * BRIGHTNESS['MAIN']), 0)
-        
-        # Eyes
-        for (row, col) in char_eyes:
-            new_row = row + offset
-            if 0 <= new_row < 8:
-                np[get_pixel_index(new_row, col)] = EYE_COLOR
-        
-        np.write()
-        time.sleep(STEP_DELAY)
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ WIFI & UPDATE FUNCTIONS                                          │
-└──────────────────────────────────────────────────────────────────┘
-"""
-class Spinner:
-    def __init__(self, color, background_color=(0,0,0)):
-        self.color = color
-        self.background_color = background_color
-        self.position = 0
-        self.last_update = time.ticks_ms()
-        self.active = False
-        self.fade_level = 0
-        self.fade_in = True
-        
-        # Configuration
-        self.speed = 100  # ms per step
-        self.trail_length = 3
-        self.fade_speed = 0.1
-        
-        # Define the spinner path (clockwise square)
-        self.path = []
-        # Top row
-        self.path.extend([(2,i) for i in range(2,6)])
-        # Right side
-        self.path.extend([(i,5) for i in range(3,6)])
-        # Bottom row
-        self.path.extend([(5,i) for i in range(4,1,-1)])
-        # Left side
-        self.path.extend([(i,2) for i in range(4,2,-1)])
-    
-    def start(self):
-        self.active = True
-        self.fade_level = 0
-        self.fade_in = True
-        self.last_update = time.ticks_ms()
-    
-    def stop(self):
-        self.fade_in = False
-    
-    def update(self, np):
-        if not self.active:
-            return False
-            
-        current_time = time.ticks_ms()
-        
-        # Handle fading
-        if self.fade_in and self.fade_level < 1.0:
-            self.fade_level = min(1.0, self.fade_level + self.fade_speed)
-        elif not self.fade_in:
-            self.fade_level = max(0.0, self.fade_level - self.fade_speed)
-            if self.fade_level == 0:
-                self.active = False
-                return False
-        
-        # Update position
-        if time.ticks_diff(current_time, self.last_update) >= self.speed:
-            self.position = (self.position + 1) % len(self.path)
-            self.last_update = current_time
-        
-        # Fill all pixels with background color first
-        for i in range(NUM_LEDS):
-            np[i] = self.background_color
-        
-        # Draw trail
-        for i in range(self.trail_length):
-            pos = (self.position - i) % len(self.path)
-            row, col = self.path[pos]
-            brightness = (self.trail_length - i) / self.trail_length * self.fade_level
-            
-            # Blend with background color
-            color = tuple(
-                int(bg + (c - bg) * brightness)
-                for c, bg in zip(self.color, self.background_color)
-            )
-            
-            np[get_pixel_index(row, col)] = color
-        
-        np.write()
-        return True
-    
-# Load Wi-Fi credentials from `wifi_config.py`
-try:
-    from wifi_config import WIFI_SSID, WIFI_PASSWORD
-    print(f"🔍 Loaded Wi-Fi config - SSID: {WIFI_SSID}")
-except ImportError:
-    print("❌ Wi-Fi configuration not found! Please create `wifi_config.py` with `WIFI_SSID` and `WIFI_PASSWORD`.")
-    WIFI_SSID = None
-    WIFI_PASSWORD = None
+# --------------------------------------------------------------------------------
+# Timing Configuration
+# --------------------------------------------------------------------------------
+LONG_PRESS_TIME = 700       # 0.7 seconds for long press
+UPDATE_CHECK_TIME = 4000    # 8 seconds for update check
+INTRO_DURATION = 1000       # 1 second for intro animations
+POMODORO_SETUP_TIMEOUT = 5000  # 5 seconds before auto-starting
+INTRO_DURATION = 5000       # 5 seconds for intro animations
 
 # GitHub OTA Update Configuration
-CURRENT_VERSION = "1.0.3"
+FORCE_UPDATE = True  # Set this to True to force update regardless of version
+WIFI_TIMEOUT_SECONDS = 5    # Seconds to wait before timeout
+WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
+CURRENT_VERSION = "1.0.4"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
 
-def run_update():
-    """
-    Attempt to connect to Wi-Fi and check for an available update.
-    If found, download and install. Otherwise, do nothing.
-    """
-    print("🔄 Checking for updates...")
-    if lan_connect():
-        update_url = check_for_update()
-        if update_url:
-            download_and_install_update(update_url)
-        else:
-            print("✅ No update available.")
-    else:
-        print("❌ Wi-Fi connection failed, skipping update.")
+# --------------------------------------------------------------------------------
+# Base State Class
+# --------------------------------------------------------------------------------
+class BaseState:
+    """Abstract base class for states."""
+    def __init__(self, controller):
+        self.controller = controller
+        self.sub_state = None  # Used for cnsistent sub-state handling.
+        self.entry_time = None  # Used for timing management.
 
-def lan_connect():
-    # Create spinner with blue color
-    spinner = Spinner(
-        color=(0, 0, int(255 * BRIGHTNESS['MAIN'])),
-        background_color=(0, 0, int(255 * BRIGHTNESS['BACKGROUND']))
-    )
-    spinner.start()
-
-    if not WIFI_SSID or not WIFI_PASSWORD:
-        spinner.stop()
-        print("❌ No Wi-Fi credentials found! Skipping Wi-Fi connection.")
-        show_wifi_fail_symbol()
-        return False
-
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    wlan.config(pm=0xa11140)
-
-    for attempt in range(WIFI_CONNECT_ATTEMPTS):
-        wlan.disconnect()
-        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-        attempt_start = time.ticks_ms()
-
-        while not wlan.isconnected():
-            spinner.update(np)
-            
-            if time.ticks_diff(time.ticks_ms(), attempt_start) > WIFI_TIMEOUT_SECONDS * 1000:
-                if attempt == WIFI_CONNECT_ATTEMPTS - 1:
-                    spinner.stop()
-                    while spinner.update(np):
-                        time.sleep(0.01)
-                    show_wifi_fail_symbol()
-                    return False
-                print("❌ Wi-Fi connection timeout! Retrying...")
-                break
-
-        else:
-            spinner.stop()
-            while spinner.update(np):
-                time.sleep(0.01)
-            print("✅ Connected!")
-            print("Network config:", wlan.ifconfig())
-            return True
-
-    return False
-
-def check_for_update():
-    """Check if there's a new firmware version while keeping animation smooth (Purple)."""
-    MIN_DURATION = 2000  # 2 seconds in milliseconds
-    start_time = time.ticks_ms()
-    FORCE_UPDATE = False 
-
-    # Create spinner with purple colors
-    spinner = Spinner(
-        color=(int(128 * BRIGHTNESS['MAIN']), 0, int(255 * BRIGHTNESS['MAIN'])),
-        background_color=(int(128 * BRIGHTNESS['BACKGROUND']), 0, int(255 * BRIGHTNESS['BACKGROUND']))
-    )
-    spinner.start()
-
-    try:
-        # Start fetching content
-        content = fetch_github_raw()
-        update_url = None
-        
-        # Process content once
-        if content:
-            try:
-                update_info = json.loads(content)
-                print(f"🔍 Current Version: {CURRENT_VERSION}")
-                print(f"🚀 Latest Version: {update_info['version']}")
-
-                if update_info['version'] > CURRENT_VERSION or FORCE_UPDATE:
-                    print("🔄 New version available!")
-                    update_url = update_info['url']
-                else:
-                    print("✅ Already up to date!")
-            except Exception as e:
-                print(f"❌ Update check failed: {e}")
-        
-        # Keep spinner going until minimum duration
-        while True:
-            spinner.update(np)
-            elapsed = time.ticks_diff(time.ticks_ms(), start_time)
-            if elapsed >= MIN_DURATION:
-                break
-            time.sleep(0.01)
-
-        # Graceful shutdown of spinner
-        spinner.stop()
-        while spinner.update(np):
-            time.sleep(0.01)
-            
-        return update_url
-
-    except Exception as e:
-        print(f"❌ Update check failed: {e}")
-        return None
-
-    finally:
-        # Ensure clean spinner shutdown if not already done
-        if spinner.active:
-            spinner.stop()
-            while spinner.update(np):
-                time.sleep(0.01)
+    def on_enter(self, **kwargs):
+        """Called when entering this state, with kwargs for flexible state transitions."""
+        self.entry_time = time.ticks_ms()
     
-def fetch_github_raw():
-    """Fetch firmware.json from GitHub."""
-    try:
-        print(f"🌍 Fetching firmware.json from {UPDATE_URL}...")
-        response = urequests.get(UPDATE_URL, timeout=10)  # Add timeout
-        if response.status_code == 200:
-            content = response.text
-            response.close()
-            return content.strip()
+    def on_exit(self):
+        """Called when leaving this state."""
+        pass
+    
+    def update(self, current_time):
+        """Periodic update (e.g., for time-based transitions)."""
+        pass
+    
+    def handle_short_press(self):
+        """Handle short button press."""
+        pass
+    
+    def handle_long_press(self):
+        """Handle long button press."""
+        pass
+    
+    def update_display(self):
+        """Set LEDs appropriately for this state."""
+        pass
+
+    def _fill_solid_color(self, color):
+        """Helper: fill display with solid color."""
+        color = tuple(int(c * BRIGHTNESS) for c in color)
+        self.controller.np.fill(color)
+        self.controller.np.write()
+
+    def ticks_since_entry(self):
+            """Helper: get ms since state entry."""
+            return time.ticks_diff(time.ticks_ms(), self.entry_time)
+    
+    def _get_pixel_index(self, row, col):
+        """Convert row and column to LED index."""
+        return row * 8 + col
+    
+    def _get_border_pixels(self):
+        """Get all border pixels in clockwise order."""
+        pixels = []
+        # Top edge
+        pixels.extend([(0, i) for i in range(8)])
+        # Right edge
+        pixels.extend([(i, 7) for i in range(1, 8)])
+        # Bottom edge (right to left)
+        pixels.extend([(7, i) for i in range(6, -1, -1)])
+        # Left edge (bottom to top)
+        pixels.extend([(i, 0) for i in range(6, 0, -1)])
+        return pixels
+
+# --------------------------------------------------------------------------------
+# Character Definition and Processing
+# --------------------------------------------------------------------------------
+class CharacterDefinition:
+    """Convert ASCII art style definitions into pixel data"""
+    @staticmethod
+    def process_layer(ascii_art):
+        pixels = []
+        for row, line in enumerate(ascii_art):
+            for col, char in enumerate(line.split()):
+                if char == 'X':
+                    pixels.append((row, col))
+        return pixels
+
+    @staticmethod
+    def create_character(data):
+        """Convert a character definition into processed pixel data"""
+        character = {
+            'id': data['id'],
+            'name': data['name'],
+            'pixels': []
+        }
+        
+        # Process standard layers if they exist
+        if 'body' in data:
+            body_pixels = CharacterDefinition.process_layer(data['body'])
+            for pixel in body_pixels:
+                character['pixels'].append({
+                    'row': pixel[0],
+                    'col': pixel[1],
+                    'type': 'body'
+                })
+                
+        if 'hl' in data:
+            highlight_pixels = CharacterDefinition.process_layer(data['hl'])
+            for pixel in highlight_pixels:
+                character['pixels'].append({
+                    'row': pixel[0],
+                    'col': pixel[1],
+                    'type': 'highlight'
+                })
+                
+        if 'sdw' in data:
+            shadow_pixels = CharacterDefinition.process_layer(data['sdw'])
+            for pixel in shadow_pixels:
+                character['pixels'].append({
+                    'row': pixel[0],
+                    'col': pixel[1],
+                    'type': 'shadow'
+                })
+        
+        # Handle custom colored pixels if they exist
+        if 'custom' in data:
+            for pixel in data['custom']:
+                character['pixels'].append({
+                    'row': pixel['row'],
+                    'col': pixel['col'],
+                    'type': 'fixed',
+                    'color': pixel['color']
+                })
+        
+        # Add animations if they exist
+        if 'animations' in data:
+            character['animations'] = data['animations']
+                
+        return character
+
+class Character:
+    def __init__(self, data):
+        self.id = data['id']
+        self.name = data['name']
+        self.pixels = data['pixels']
+        self.rainbow_offset = 0
+
+        # Animation handling
+        self.animations = {}
+
+        # Process animations if they exist in the data
+        if 'animations' in data:
+            for anim in data['animations']:
+                self.animations[anim['name']] = {
+                    'interval': anim['interval'],
+                    'frame_duration': anim['frame_duration'],
+                    'reverse': anim.get('reverse', False),
+                    'color': anim.get('color', (255, 255, 255)),
+                    'frames': [CharacterDefinition.process_layer(frame) for frame in anim['frames']],
+                    'last_trigger': time.ticks_ms(),
+                    'current_frame': 0,
+                    'direction': 1
+                }
+        
+    def _update_animations(self, current_time):
+        """Update all animation states"""
+        animation_pixels = []
+        
+        for anim_name, anim in self.animations.items():
+            # Check time since last trigger
+            time_since_trigger = time.ticks_diff(current_time, anim['last_trigger'])
+            
+            # If we haven't reached the interval yet, show first frame
+            if time_since_trigger < anim['interval']:
+                frame_pixels = anim['frames'][0]
+                animation_pixels.extend([
+                    {'row': pixel[0], 'col': pixel[1], 'color': anim['color']}
+                    for pixel in frame_pixels
+                ])
+                continue
+                
+            # Calculate which frame to show
+            animation_duration = anim['frame_duration'] * len(anim['frames'])
+            time_into_interval = time_since_trigger % anim['interval']
+            
+            if time_into_interval < animation_duration:
+                frame_number = (time_into_interval // anim['frame_duration'])
+                if frame_number >= len(anim['frames']):
+                    frame_number = 0
+            else:
+                frame_number = 0
+                
+            # Add current frame's pixels to animation list
+            frame_pixels = anim['frames'][frame_number]
+            animation_pixels.extend([
+                {'row': pixel[0], 'col': pixel[1], 'color': anim['color']}
+                for pixel in frame_pixels
+            ])
+                
+        return animation_pixels
+
+    def render(self, mode, np, brightness=0.1, row_offset=0, selection_color=None):
+        """Updated render to handle animations"""
+        np.fill((0, 0, 0))
+        
+        # Render base character first
+        if selection_color:
+            self._render_solid(np, mode, brightness, row_offset, selection_color)
         else:
-            print(f"❌ HTTP Error {response.status_code}")
+            if mode == 'social':
+                self._render_rainbow(np, brightness, row_offset)
+            else:
+                self._render_solid(np, mode, brightness, row_offset)
+        
+        # Then overlay animation pixels
+        animation_pixels = self._update_animations(time.ticks_ms())
+        for pixel in animation_pixels:
+            new_row = pixel['row'] + row_offset
+            if 0 <= new_row < 8:
+                color = tuple(int(c * brightness) for c in pixel['color'])
+                np[self._get_pixel_index(new_row, pixel['col'])] = color
+                
+        np.write()
+                
+    def _render_solid(self, np, mode, brightness, row_offset=0, override_color=None):
+        base_colors = {
+            'available': (0, 255, 0),  # Green
+            'busy': (255, 0, 0),      # Red
+        }
+        base_color = override_color if override_color else base_colors.get(mode, (255, 255, 255))
+        
+        for pixel in self.pixels:
+            new_row = pixel['row'] + row_offset
+            if 0 <= new_row < 8:  # Only render if pixel is on screen
+                color = self._process_pixel(pixel, base_color, brightness)
+                np[self._get_pixel_index(new_row, pixel['col'])] = color
+
+
+    def _render_rainbow(self, np, brightness, row_offset=0):
+
+        # Set speed of rainbow effect
+        self.rainbow_offset = (self.rainbow_offset + 3) % 255
+        
+        for pixel in self.pixels:
+            new_row = pixel['row'] + row_offset
+            if 0 <= new_row < 8:  # Only render if pixel is on screen
+                if pixel['type'] == 'fixed':
+                    color = pixel['color']
+                else:
+                    # Set smoothness of gradient (Lower = smoother)
+                    hue = (self.rainbow_offset + (new_row + pixel['col']) * 6) % 255
+                    color = self._wheel(hue)
+                
+                color = tuple(int(c * brightness) for c in color)
+                np[self._get_pixel_index(new_row, pixel['col'])] = color
+
+    def _process_pixel(self, pixel, base_color, brightness):
+        if pixel['type'] == 'fixed':
+            color = pixel['color']
+        elif pixel['type'] == 'highlight':
+            color = tuple(min(255, c + 40) for c in base_color)
+        elif pixel['type'] == 'shadow':
+            color = tuple(max(0, c - 40) for c in base_color)
+        else:  # 'body'
+            color = base_color
+            
+        return tuple(int(c * brightness) for c in color)
+    
+    @staticmethod
+    def _wheel(pos):
+        """Generate rainbow colors with softer tones."""
+        # Minimum value creates the "softness" - higher = softer colors
+        min_value = 10  # Try values between 50-100
+        # Max value stays at 255 but the difference between min and max is smaller
+        max_value = 255
+        
+        if pos < 85:
+            return (
+                min_value + int(pos * 3 * (max_value-min_value)/255), 
+                min_value + int((255 - pos * 3) * (max_value-min_value)/255), 
+                min_value
+            )
+        elif pos < 170:
+            pos -= 85
+            return (
+                min_value + int((255 - pos * 3) * (max_value-min_value)/255), 
+                min_value, 
+                min_value + int(pos * 3 * (max_value-min_value)/255)
+            )
+        else:
+            pos -= 170
+            return (
+                min_value, 
+                min_value + int(pos * 3 * (max_value-min_value)/255), 
+                min_value + int((255 - pos * 3) * (max_value-min_value)/255)
+            )
+
+    @staticmethod
+    def _get_pixel_index(row, col):
+        return row * 8 + col
+    
+# --------------------------------------------------------------------------------
+# Character Definitions
+# --------------------------------------------------------------------------------
+CHARACTERS_RAW = [
+    {
+        "id": "ghost_plain",
+        "name": "Plain Ghost",
+        "body": [
+            "_ _ X X X X _ _",
+            "_ X X X X X X _",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X _ X _ X _ X _"
+        ],
+        "animations": [
+            {
+                "name": "blink",
+                "interval": 3000,
+                "frame_duration": 50,
+                "reverse": False,
+                "color": (255, 255, 255),
+                "frames": [
+                    [   # Frame 1 - Eyes open
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ X _ _ X _ _",
+                        "_ _ X _ _ X _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _"
+                    ],
+                    [   # Frame 2 - Eyes half closed
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ X _ _ X _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _"
+                    ],
+                    [   # Frame 3 - Eyes closed
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _"
+                    ]
+                ]
+            }
+        ]
+    },
+    {
+        "id": "ghost_fancy",
+        "name": "Fancy Ghost",
+        "body": [
+            "_ _ X X X X _ _",
+            "_ X X X X X X _",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X _ X _ X _ X _"
+        ],
+        # Eyes
+        "custom": [
+            {'row': 4, 'col': 2, 'color': (255, 0, 0)},    # Red
+            {'row': 4, 'col': 5, 'color': (255, 0, 0)},    # Red
+            {'row': 5, 'col': 2, 'color': (255, 127, 0)},  # Orange
+            {'row': 5, 'col': 5, 'color': (255, 127, 0)},  # Orange
+        ],
+        "hl": [
+            "_ _ _ _ _ X _ _",
+            "_ _ _ _ _ _ X _",
+            "_ _ _ _ _ _ _ X",
+            "_ _ _ _ _ _ _ _",
+            "_ _ _ _ _ _ _ _",
+            "_ _ _ _ _ _ _ _",
+            "_ _ _ _ _ _ _ _",
+            "_ _ _ _ _ _ _ _"
+        ],
+        "sdw": [
+            "_ _ _ _ _ _ _ _",
+            "_ _ _ _ _ _ _ _",
+            "X _ _ _ _ _ _ _",
+            "X _ _ _ _ _ _ _",
+            "X _ _ _ _ _ _ _",
+            "X _ _ _ _ _ _ _",
+            "X X _ _ _ _ _ _",
+            "X _ X _ _ _ _ _"
+        ]
+    },
+    {
+        "id": "ghost_colorful",
+        "name": "Colorful Ghost",
+        "body": [
+            "_ _ X X X X _ _",
+            "_ X X X X X X _",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X _ X _ X _ X _"
+        ],
+        "custom": [
+            # Hat
+            {'row': 0, 'col': 2, 'color': (255, 0, 0)},    # Red
+            {'row': 0, 'col': 3, 'color': (255, 127, 0)},  # Orange
+            {'row': 0, 'col': 4, 'color': (255, 255, 0)},  # Yellow
+            {'row': 0, 'col': 5, 'color': (0, 255, 0)},    # Green
+            # Eyes
+            {'row': 4, 'col': 2, 'color': (255, 0, 0)},    # Red
+            {'row': 4, 'col': 5, 'color': (255, 0, 0)},    # Red
+            {'row': 5, 'col': 2, 'color': (255, 127, 0)},  # Orange
+            {'row': 5, 'col': 5, 'color': (255, 127, 0)},  # Orange
+        ]
+    }
+]
+
+# Process the raw definitions into our final character data
+CHARACTERS_DATA = [CharacterDefinition.create_character(char) for char in CHARACTERS_RAW]
+
+# --------------------------------------------------------------------------------
+# DefaultState
+# --------------------------------------------------------------------------------
+class DefaultSubState:
+    """Default mode states"""
+    INTRO = "intro"
+    AVAILABLE = "available"
+    BUSY = "busy"
+    SOCIAL = "social"
+    
+    # States that we cycle through with short press
+    CYCLE_STATES = [AVAILABLE, BUSY, SOCIAL]
+
+class DefaultState(BaseState):
+    """Main 'Default' state with sub-states: INTRO, AVAILABLE, BUSY, SOCIAL."""
+
+    ANIMATION_DURATION = 600  # Total duration in milliseconds
+    
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.sub_state = DefaultSubState.INTRO
+        self.character = Character(CHARACTERS_DATA[controller.selected_character])
+        self.animation_start = None
+    
+    def on_enter(self):
+        print("Entering DefaultState / INTRO")
+        self.sub_state = DefaultSubState.INTRO
+        self.animation_start = time.ticks_ms()
+        self.character = Character(CHARACTERS_DATA[self.controller.selected_character])
+    
+    def _ease_out_cubic(self, t):
+        """Cubic easing function for smooth animation"""
+        t = 1 - t
+        return 1 - (t * t * t)
+    
+    def update(self, current_time):
+        if self.sub_state == DefaultSubState.INTRO:
+            progress = time.ticks_diff(current_time, self.animation_start) / self.ANIMATION_DURATION
+            
+            if progress >= 1:
+                print(f"Auto: Default {DefaultSubState.INTRO} → {DefaultSubState.AVAILABLE}")
+                self.sub_state = DefaultSubState.AVAILABLE
+    
+    def handle_short_press(self):
+        if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
+            # Find current state in cycle and move to next
+            current_idx = DefaultSubState.CYCLE_STATES.index(self.sub_state)
+            next_idx = (current_idx + 1) % len(DefaultSubState.CYCLE_STATES)
+            self.sub_state = DefaultSubState.CYCLE_STATES[next_idx]
+            print(f"Short press: Default → {self.sub_state}")
+    
+    def handle_long_press(self):
+        if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
+            print("Long press: Default → Pomodoro INTRO")
+            self.controller.switch_to(PomodoroState(self.controller))
+    
+    def update_display(self):
+        if self.sub_state == DefaultSubState.INTRO:
+            # Calculate smooth animation progress
+            progress = time.ticks_diff(time.ticks_ms(), self.animation_start) / self.ANIMATION_DURATION
+            if progress > 1:
+                progress = 1
+                
+            # Apply easing function
+            eased_progress = self._ease_out_cubic(progress)
+            
+            # Calculate row offset (8 to 0)
+            row_offset = (1 - eased_progress) * 8
+            
+            # Render with calculated offset
+            self.character.render(
+                mode=DefaultSubState.AVAILABLE,
+                np=self.controller.np,
+                brightness=BRIGHTNESS,
+                row_offset=int(row_offset)
+            )
+        else:
+            # Normal rendering
+            self.character.render(
+                mode=self.sub_state,
+                np=self.controller.np,
+                brightness=BRIGHTNESS
+            )
+
+# --------------------------------------------------------------------------------
+# CharactersState
+# --------------------------------------------------------------------------------
+class CharactersState(BaseState):
+    """State for selecting and saving characters."""
+
+    SELECTION_COLOR = (255, 0, 128)  # Pink color for selection mode
+    
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.selected_index = controller.selected_character
+        self.preview_character = Character(CHARACTERS_DATA[self.selected_index])
+    
+    def on_enter(self):
+        print(f"Entering CharactersState - Showing: {CHARACTERS_DATA[self.selected_index]['name']}")
+    
+    def update(self, current_time):
+        pass
+    
+    def handle_short_press(self):
+        # Cycle through characters
+        self.selected_index = (self.selected_index + 1) % len(CHARACTERS_DATA)
+        
+        # Create new character and force animation to start from beginning of interval
+        new_character = Character(CHARACTERS_DATA[self.selected_index])
+        current_time = time.ticks_ms()
+        
+        # Force animations to start from the beginning of their interval
+        for anim in new_character.animations.values():
+            anim['last_trigger'] = current_time  # Set to current time
+        
+        self.preview_character = new_character
+        print(f"Selected character: {CHARACTERS_DATA[self.selected_index]['name']}")
+    
+    def handle_long_press(self):
+        # Save selection and return to DefaultState
+        self.controller.selected_character = self.selected_index
+        success = self.controller.save_character(self.selected_index)
+        if success:
+            print(f"Saved character selection: {CHARACTERS_DATA[self.selected_index]['name']}")
+        else:
+            print("Warning: Failed to save character selection")
+        self.controller.switch_to(DefaultState(self.controller))
+    
+    def update_display(self):
+        # Render the character with the selection color
+        self.preview_character.render(
+            mode="available",  # Use available mode as base
+            np=self.controller.np,
+            brightness=BRIGHTNESS,
+            selection_color=self.SELECTION_COLOR
+        )
+
+# --------------------------------------------------------------------------------
+# PomodoroState
+# --------------------------------------------------------------------------------
+class PomodoroState(BaseState):
+    """State for Pomodoro timers with sub-states: INTRO, SETUP, ACTIVE, COMPLETE."""
+    
+    COLORS = {
+        "intro": (255, 128, 0),    # Light orange
+        "setup": (255, 165, 0),    # Orange
+        "active": (255, 69, 0),    # Red-orange
+        "complete": (255, 215, 0), # Gold
+    }
+    
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.sub_state = "intro"
+        self.intro_start_time = time.ticks_ms()
+        self.pomodoro_setup_start = None
+        self.pomodoro_start_time = None
+        self.pomodoro_duration = 15  # Start with 15 minutes
+    
+    def on_enter(self):
+        print("Entering PomodoroState / INTRO")
+        self.sub_state = "intro"
+        self.intro_start_time = time.ticks_ms()
+    
+    def update(self, current_time):
+        # Transition from INTRO to SETUP
+        if self.sub_state == "intro":
+            if time.ticks_diff(current_time, self.intro_start_time) >= INTRO_DURATION:
+                self.sub_state = "setup"
+                self.pomodoro_setup_start = current_time
+                print("Auto: Pomodoro INTRO → SETUP")
+        
+        # Transition from SETUP to ACTIVE if time runs out
+        elif self.sub_state == "setup":
+            if time.ticks_diff(current_time, self.pomodoro_setup_start) >= POMODORO_SETUP_TIMEOUT:
+                self.sub_state = "active"
+                self.pomodoro_start_time = current_time
+                print("Auto: Pomodoro SETUP → ACTIVE (timeout)")
+    
+    def handle_short_press(self):
+        # Adjust or switch sub-states
+        if self.sub_state == "setup":
+            # Increase pomodoro duration in increments of 15, up to 60
+            self.pomodoro_duration += 15
+            if self.pomodoro_duration > 60:
+                self.pomodoro_duration = 15
+            # Reset the setup timeout start
+            self.pomodoro_setup_start = time.ticks_ms()
+            print(f"Short press: Pomodoro duration: {self.pomodoro_duration} minutes")
+        
+        elif self.sub_state == "active":
+            # Interrupt pomodoro
+            self.sub_state = "complete"
+            print("Short press: Pomodoro ACTIVE → COMPLETE (interrupted)")
+        
+        elif self.sub_state == "complete":
+            # Restart pomodoro from intro
+            self.sub_state = "intro"
+            self.intro_start_time = time.ticks_ms()
+            print("Short press: Pomodoro COMPLETE → INTRO (restart)")
+    
+    def handle_long_press(self):
+        # Long press: go back to DefaultState (intro)
+        print("Long press: Pomodoro → Default INTRO")
+        self.controller.switch_to(DefaultState(self.controller))
+    
+    def update_display(self):
+        color = self.COLORS.get(self.sub_state, (255, 255, 255))
+        self._fill_solid_color(color)
+
+# --------------------------------------------------------------------------------
+# UpdateState
+# --------------------------------------------------------------------------------
+class UpdateSubState:
+    """Update process states"""
+    CONNECTING = "connecting"
+    CHECKING = "checking"
+    DOWNLOADING = "downloading"
+    INSTALLING = "installing"
+    ERROR = "error"
+
+class UpdateState(BaseState):
+    """Handles WiFi connection and update process."""
+
+    COLORS = {
+        'CONNECTING': (0, 0, 255),    # Blue
+        'CHECKING': (128, 0, 255),    # Purple
+        'DOWNLOADING': (255, 0, 0),   # Red
+        'INSTALLING': (255, 128, 0),  # Orange
+        'ERROR': (255, 0, 0),         # Red
+    }
+
+    # Define spinner properties
+    BACKGROUND_BRIGHTNESS = 0.1  # Background at 10% brightness
+    SPINNER_BRIGHTNESS = 0.4  # Spinner will be 40% brighter than background
+    SPINNER_SPEED = 100  # ms per step
+    
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.error = None
+        self.spinner_position = 0
+        self.last_spinner_update = time.ticks_ms()
+
+    def _update_spinner(self, base_color):
+        """Update spinner animation."""
+        current_time = time.ticks_ms()
+        if time.ticks_diff(current_time, self.last_spinner_update) >= self.SPINNER_SPEED:
+            self.spinner_position = (self.spinner_position + 1) % 28
+            self.last_spinner_update = current_time
+        
+        # Create dimmer background color
+        background_color = tuple(int(c * self.BACKGROUND_BRIGHTNESS) for c in base_color)
+        
+        # Create brighter spinner color
+        spinner_color = tuple(int(c * self.SPINNER_BRIGHTNESS) for c in base_color)
+        
+        # Fill with dim background
+        self.controller.np.fill(background_color)
+        
+        # Draw spinner with trail
+        border_pixels = self._get_border_pixels()
+        for i in range(5):  # 5 pixel trail
+            pos = (self.spinner_position - i) % len(border_pixels)
+            row, col = border_pixels[pos]
+            brightness = (5 - i) / 5  # Fade trail from 100% to 0%
+            
+            # Calculate color for this trail pixel
+            color = tuple(
+                int(background_color[j] + (spinner_color[j] - background_color[j]) * brightness)
+                for j in range(3)
+            )
+            self.controller.np[self._get_pixel_index(row, col)] = color
+        
+        self.controller.np.write()
+        
+    def on_enter(self, **kwargs):
+        super().on_enter(**kwargs)
+        self.sub_state = UpdateSubState.CONNECTING
+        print("Starting update check...")
+        self._fill_solid_color(self.COLORS['CONNECTING'])
+        
+    def update(self, current_time):
+        # Handle spinner states
+        if self.sub_state in [UpdateSubState.CONNECTING, UpdateSubState.CHECKING, UpdateSubState.INSTALLING]:
+            self._update_spinner(self.COLORS[self.sub_state.upper()])
+        # Handle error state with solid color
+        elif self.sub_state == UpdateSubState.ERROR:
+            self._fill_solid_color(self.COLORS[self.sub_state.upper()])
+        # Download state is handled by progress bar in _handle_download
+        
+        # Regular state handling
+        if self.sub_state == UpdateSubState.CONNECTING:
+            self._handle_wifi_connection()
+        elif self.sub_state == UpdateSubState.CHECKING:
+            self._handle_version_check()
+        elif self.sub_state == UpdateSubState.DOWNLOADING:
+            self._handle_download()
+        elif self.sub_state == UpdateSubState.INSTALLING:
+            self._handle_install()
+
+    def _handle_wifi_connection(self):
+        """Handle WiFi connection attempt."""
+        try:
+            # Only try to connect if we haven't started yet
+            if not hasattr(self, '_wifi_connection_started'):
+                self._wifi_connection_started = True
+                try:
+                    from wifi_config import WIFI_SSID, WIFI_PASSWORD
+                    print(f"🔍 Loaded Wi-Fi config - SSID: {WIFI_SSID}")
+                except ImportError:
+                    raise Exception("No WiFi credentials file")
+                    
+                if not WIFI_SSID or not WIFI_PASSWORD:
+                    raise Exception("No WiFi credentials")
+                    
+                wlan = network.WLAN(network.STA_IF)
+                wlan.active(True)
+                wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+                self._connection_start_time = time.ticks_ms()
+            
+            # Check connection status
+            wlan = network.WLAN(network.STA_IF)
+            if wlan.isconnected():
+                print("WiFi connected!")
+                delattr(self, '_wifi_connection_started')  # Reset for next time
+                self.sub_state = UpdateSubState.CHECKING
+            elif time.ticks_diff(time.ticks_ms(), self._connection_start_time) > WIFI_TIMEOUT_SECONDS * 1000:
+                raise Exception("WiFi connection timeout")
+
+        except Exception as e:
+            self._handle_error("WiFi connection failed", e)
+
+    def _handle_version_check(self):
+        """Check for available updates."""
+        try:
+            # Only start version check if we haven't yet
+            if not hasattr(self, '_version_check_started'):
+                self._version_check_started = True
+                self._version_check_start_time = time.ticks_ms()
+                
+                # Do the actual version check
+                content = self._fetch_github_raw()
+                if not content:
+                    raise Exception("Failed to fetch version info")
+                    
+                self._update_info = json.loads(content)
+                print(f"Current version: {CURRENT_VERSION}")
+                print(f"Latest version: {self._update_info['version']}")
+            
+            # Check if enough time has passed (2 seconds)
+            if time.ticks_diff(time.ticks_ms(), self._version_check_start_time) >= 2000:
+                # Time has passed, proceed with state change
+                delattr(self, '_version_check_started')  # Reset for next time
+                
+                if self._update_info['version'] > CURRENT_VERSION or FORCE_UPDATE:
+                    if FORCE_UPDATE:
+                        print("Force update enabled - downloading firmware...")
+                    else:
+                        print(f"Update available: {self._update_info['version']}")
+                        
+                    # Store the URL before changing state
+                    self.controller.transition_data['update_url'] = self._update_info['url']
+                    self.sub_state = UpdateSubState.DOWNLOADING
+                else:
+                    print("No update needed")
+                    machine.reset()
+                    
+        except Exception as e:
+            self._handle_error("Version check failed", e)
+            
+    def _fetch_github_raw(self):
+        """Fetch version info from GitHub."""
+        try:
+            response = urequests.get(UPDATE_URL)
+            if response.status_code == 200:
+                content = response.text
+                response.close()
+                return content.strip()
             response.close()
             return None
-    except Exception as e:
-        print(f"❌ Request failed: {e}")
-        return None
+        except Exception as e:
+            print(f"GitHub fetch failed: {e}")
+            return None
+            
+    def _fill_progress_bar(self, color, progress):
+        """
+        Fill display with a progress bar.
+        progress should be 0.0 to 1.0
+        """
+        # Create dimmed background color
+        background_color = tuple(int(c * self.BACKGROUND_BRIGHTNESS) for c in color)
+        
+        # Fill background
+        self.controller.np.fill(background_color)
+        
+        # Calculate how many columns to fill (out of 8)
+        filled_cols = min(8, int(progress * 8))
+        
+        # Fill the progress bar
+        for row in range(8):
+            for col in range(filled_cols):
+                self.controller.np[self._get_pixel_index(row, col)] = color
+                
+        self.controller.np.write()
 
-def download_and_install_update(url):
-    """Download new firmware, install, and reboot (Red)."""
-    
-    # Define the download arrow pattern
-    download_arrow = [
-        "0 0 0 X X 0 0 0",
-        "0 0 0 X X 0 0 0",
-        "0 0 0 X X 0 0 0",
-        "0 X X X X X X 0",
-        "0 0 X X X X 0 0",
-        "0 0 0 X X 0 0 0",
-        "X 0 0 0 0 0 0 X",
-        "X X X X X X X X"
-    ]
-    
-    # Convert pattern to LED positions
-    arrow_leds = []
-    for row, pattern in enumerate(download_arrow):
-        for col, pixel in enumerate(filter(lambda x: x != ' ', pattern)):
-            if pixel == 'X':
-                arrow_leds.append((row, col))
+    def _handle_download(self):
+        """Download new firmware with progress bar."""
+        try:
+            url = self.controller.transition_data.get('update_url')
+            if not url:
+                raise Exception("No update URL")
 
-    def render_arrow(brightness_factor):
-        # Set background
-        background_color = (int(255 * BRIGHTNESS['BACKGROUND']), 0, 0)
-        np.fill(background_color)
-        
-        # Ensure arrow is always brighter than background
-        min_brightness = BRIGHTNESS['BACKGROUND'] * 2  # Minimum brightness is 2x background
-        adjusted_brightness = min_brightness + (BRIGHTNESS['MAIN'] - min_brightness) * brightness_factor
-        
-        # Draw arrow
-        arrow_color = (int(255 * adjusted_brightness), 0, 0)
-        for row, col in arrow_leds:
-            np[get_pixel_index(row, col)] = arrow_color
-        
-        np.write()
+            # Get content length first
+            response = urequests.get(url, stream=True)
+            if response.status_code != 200:
+                raise Exception(f"Download failed: {response.status_code}")
 
-    try:
-        print("⬇️ Downloading new firmware...")
-        
-        # Start with full brightness pulsing while downloading
-        response = urequests.get(url)
-        
-        if response.status_code == 200:
-            content = response.text
+            total_size = int(response.headers.get('Content-Length', 0))
+            bytes_downloaded = 0
+            all_content = []
+
+            while True:
+                chunk = response.raw.read(64)  # Read in smaller chunks
+                if not chunk:
+                    break
+
+                bytes_downloaded += len(chunk)
+                all_content.append(chunk)
+                
+                # Update progress bar
+                progress = bytes_downloaded / total_size
+                self._fill_progress_bar(self.COLORS['DOWNLOADING'], progress)
+
             response.close()
-
-            print("💾 Saving new firmware...")
             
-            # Pulse the arrow while saving
-            pulse_start = time.ticks_ms()
-            while time.ticks_diff(time.ticks_ms(), pulse_start) < 2000:  # 2 second animation
-                # Calculate brightness using sine wave (adjusted to stay between 0.2 and 1.0)
-                progress = time.ticks_diff(time.ticks_ms(), pulse_start) / 2000
-                brightness = 0.6 + 0.4 * math.sin(progress * 2 * math.pi * 2)  # Range from 0.2 to 1.0
-                render_arrow(brightness)
-                time.sleep(0.01)
-            
-            # Save the files
+            # Write the complete file
+            content = b''.join(all_content).decode()
             with open('main.py.new', 'w') as f:
                 f.write(content)
 
-            try:
-                os.remove('main.py.bak')  # Remove previous backup if it exists
-            except:
-                pass
-
-            os.rename('main.py', 'main.py.bak')
-            os.rename('main.py.new', 'main.py')
-
-            print("✅ Update successful! Rebooting...")
+            # Show complete state briefly
+            self._fill_progress_bar(self.COLORS['DOWNLOADING'], 1.0)
+            time.sleep(0.3)
             
-            # Final bright flash before reboot
-            for brightness in range(50, 100):  # Start from 50% brightness
-                render_arrow(brightness/100)
-                time.sleep(0.01)
-            for brightness in range(100, 49, -1):  # Only fade down to 50%
-                render_arrow(brightness/100)
-                time.sleep(0.01)
+            self.sub_state = UpdateSubState.INSTALLING
+            
+        except Exception as e:
+            self._handle_error("Download failed", e)
+            
+    def _handle_install(self):
+        """Install new firmware and reset."""
+        try:
+            # Only start install if we haven't yet
+            if not hasattr(self, '_install_started'):
+                self._install_started = True
+                self._install_start_time = time.ticks_ms()
                 
-            time.sleep(0.5)
-            machine.reset()
-
-        else:
-            print(f"❌ HTTP Error {response.status_code}")
-            response.close()
-            
-            # Error indication: rapid flashing but staying visible
-            for _ in range(3):
-                render_arrow(1.0)
-                time.sleep(0.1)
-                render_arrow(0.3)  # Don't go too dim
-                time.sleep(0.1)
-
-    except Exception as e:
-        print(f"❌ Update failed: {e}")
-        
-        # Error indication: rapid flashing but staying visible
-        for _ in range(3):
-            render_arrow(1.0)
-            time.sleep(0.1)
-            render_arrow(0.3)  # Don't go too dim
-            time.sleep(0.1)
-
-def show_wifi_fail_symbol():
-    """Display a 'no WiFi' symbol in red."""
-    FAIL_COLOR = (255, 0, 0)
-    wifi_symbol = [
-        "0 0 0 0 0 0 0 0",
-        "0 0 0 X X 0 0 0",
-        "0 X X X X X X 0",
-        "X 0 0 0 0 0 0 X",
-        "0 0 X X X X 0 0",
-        "0 X 0 0 0 0 X 0",
-        "0 0 0 X X 0 0 0",
-        "0 0 0 0 0 0 0 0"
-    ]
-    
-    # Convert the pattern to LED positions
-    symbol_leds = []
-    for row, pattern in enumerate(wifi_symbol):
-        for col, pixel in enumerate(filter(lambda x: x != ' ', pattern)):
-            if pixel == 'X':
-                symbol_leds.append((row, col))
-    
-    # Fade in
-    for brightness in range(51):  # 0 to 50 steps
-        np.fill((0, 0, 0))
-        color = adjust_color(FAIL_COLOR, BRIGHTNESS['MAIN'] * brightness/50)
-        for row, col in symbol_leds:
-            np[get_pixel_index(row, col)] = color
-        np.write()
-        time.sleep(0.01)
-    
-    # Hold
-    time.sleep(2)
-    
-    # Fade out
-    for brightness in range(50, -1, -1):  # 50 to 0 steps
-        np.fill((0, 0, 0))
-        color = adjust_color(FAIL_COLOR, BRIGHTNESS['MAIN'] * brightness/50)
-        for row, col in symbol_leds:
-            np[get_pixel_index(row, col)] = color
-        np.write()
-        time.sleep(0.01)
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ BUTTON ACTIONS                                                   │
-└──────────────────────────────────────────────────────────────────┘
-"""
-
-def handle_button_events(current_time):
-    global current_state, status_state, button_state
-    
-    button_pressed = button.value() == 0
-    
-    # Button just pressed
-    if button_pressed and not button_state["pressed"]:
-        button_state["pressed"] = True
-        button_state["press_start"] = current_time
-        button_state["long_press_handled"] = False
-    
-    # Button is being held
-    elif button_pressed and button_state["pressed"]:
-        press_duration = current_time - button_state["press_start"]
-        
-        if press_duration >= LONG_PRESS_TIME and not button_state["long_press_handled"]:
-            button_state["long_press_handled"] = True
-            
-            # Long press state transitions
-            if current_state == State.CHARACTERS:
-
-                # 1) Save character before exiting
-                save_character_config(selected_character)
-                
-                # 2) Then exit char select
-                button_state["ignore_next_release"] = True
-                current_state = State.DEFAULT
-                status_state = State.Default.AVAILABLE
-                slide_in_char()
-                render_char((0, 255, 0), current_time)
-            
-            elif current_state == State.DEFAULT:
-                current_state = State.POMODORO
-                pomodoro_show_intro()
-                start_pomodoro_setup()
-                
-            elif current_state == State.POMODORO:
-                current_state = State.DEFAULT
-                status_state = State.Default.AVAILABLE
-                slide_in_char()
-                render_char((0, 255, 0), current_time)
-
-    
-    # Button just released
-    elif not button_pressed and button_state["pressed"]:
-        press_duration = current_time - button_state["press_start"]
-        button_state["pressed"] = False
-        
-        if not button_state["ignore_next_release"]:
-            if press_duration < LONG_PRESS_TIME:
-                if current_time - button_state["last_release_time"] > 300:  # Debounce
-                    handle_short_press(current_time)
-        
-        button_state["ignore_next_release"] = False
-        button_state["last_release_time"] = current_time
-
-def handle_short_press(current_time):
-    global current_state, status_state, selected_character, pomodoro
-    
-    if current_state == State.CHARACTERS:
-        selected_character = (selected_character + 1) % len(CHARACTERS_DATA)
-        preview_char(selected_character)
-        
-    elif current_state == State.POMODORO:
-        if pomodoro["state"] == PomodoroState.SETUP:
-            increment_setup_time()
-            pomodoro["idle_timer"] = current_time
-        elif pomodoro["state"] == PomodoroState.ACTIVE:
-            pomodoro["state"] = PomodoroState.COMPLETE
-            rainbow_takeover(duration=0.5, gradient_speed=3)
-            
-    elif current_state == State.DEFAULT:
-        # Cycle through normal mode states
-        if status_state == State.Default.AVAILABLE:
-            status_state = State.Default.BUSY
-            render_char((255, 0, 0), current_time)
-        elif status_state == State.Default.BUSY:
-            status_state = State.Default.SOCIAL
-        else:  # SOCIAL
-            status_state = State.Default.AVAILABLE
-            render_char((0, 255, 0), current_time)
-
-# Detect button and either trigger character select or update check.
-def boot_button_check():
-
-    if button.value() == 0:
-
-        # Display character select screen immediately.
-        preview_char(selected_character)
-
-        # While button is still held, check for update trigger
-        start_time = time.ticks_ms()
-        while button.value() == 0:
-
-            # If we reach update check time, run update check.
-            current_hold_time = time.ticks_diff(time.ticks_ms(), start_time)
-            if current_hold_time >= UPDATE_CHECK_TIME:
-                run_update()
-                return False # Don't enter character select after update.
-        
-            time.sleep(0.05)
-
-        # Released before 5s => return True => char selection
-        return True
-    
-    # Button not pressed => normal mode
-    return False
-
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ UTILITY FUNCTIONS                                                │
-└──────────────────────────────────────────────────────────────────┘
-"""
-
-# Adjust a color tuple by a brightness factor.
-def adjust_color(color, brightness_factor=BRIGHTNESS['MAIN']):
-    """Adjust a color tuple by a brightness factor."""
-    return tuple(int(c * brightness_factor) for c in color)
-
-# Get all border pixels in order (clockwise from top-left).
-def get_border_pixels():
-    pixels = []
-    pixels.extend([(0, i) for i in range(8)])
-    pixels.extend([(i, 7) for i in range(1, 8)])
-    pixels.extend([(7, i) for i in range(6, -1, -1)])
-    pixels.extend([(i, 0) for i in range(6, 0, -1)])
-    return pixels
-
-def get_pixel_index(row, col):
-    return row * 8 + col
-
-def wheel(pos):
-    """ Generate rainbow colors with lower saturation (washed-out effect). """
-    pos = pos % 255
-    SATURATION_FACTOR = 0.9  # 0.0 = fully gray, 1.0 = full saturation
-
-    if pos < 85:
-        r, g, b = (pos * 3, 255 - pos * 3, 0)
-    elif pos < 170:
-        pos -= 85
-        r, g, b = (255 - pos * 3, 0, pos * 3)
-    else:
-        pos -= 170
-        r, g, b = (0, pos * 3, 255 - pos * 3)
-
-    # Blend towards white (desaturate)
-    white_blend = 255 * (1 - SATURATION_FACTOR)
-    r = int(r * SATURATION_FACTOR + white_blend)
-    g = int(g * SATURATION_FACTOR + white_blend)
-    b = int(b * SATURATION_FACTOR + white_blend)
-
-    return (int(r * BRIGHTNESS['MAIN']), int(g * BRIGHTNESS['MAIN']), int(b * BRIGHTNESS['MAIN']))
-
-def animate_pixels_wave_concurrent(animations):
-    """
-    Run multiple wave animations concurrently.
-    
-    Args:
-        animations: List of dicts, each containing:
-            - pixels: List of (row, col) tuples
-            - color: Target color tuple
-            - background_color: Background color tuple
-            - duration: Animation duration in ms
-            - delay: Start delay in ms
-            - stay_lit: Boolean to keep pixels lit
-            - tail_length: Float 0.0-1.0 controlling the fade trail length (optional)
-    """
-    start_times = []
-    current_time = time.ticks_ms()
-    
-    for anim in animations:
-        start_times.append(current_time + anim.get('delay', 0))
-    
-    while True:
-        current_time = time.ticks_ms()
-        all_complete = True
-        
-        for i, anim in enumerate(animations):
-            if current_time < start_times[i]:
-                all_complete = False
-                continue
-                
-            time_in_anim = time.ticks_diff(current_time, start_times[i])
-            
-            if time_in_anim >= anim['duration']:
-                # Set final state for completed animations
-                final_color = anim['color'] if anim.get('stay_lit', False) else anim['background_color']
-                for row, col in anim['pixels']:
-                    np[get_pixel_index(row, col)] = final_color
-                continue
-                
-            all_complete = False
-            num_pixels = len(anim['pixels'])
-            wave_width = num_pixels + 2
-            tail_length = anim.get('tail_length', 0.5)  # Default to 0.5 if not specified
-            
-            progress = time_in_anim / anim['duration']
-            wave_position = progress * (num_pixels + wave_width)
-            
-            for j, (row, col) in enumerate(anim['pixels']):
-                pixel_wave_pos = wave_position - j
-                
-                if anim.get('stay_lit', False) and pixel_wave_pos >= wave_width/2:
-                    brightness = 1
-                else:
-                    if pixel_wave_pos <= 0 or pixel_wave_pos >= wave_width:
-                        brightness = 0
-                    else:
-                        brightness = 1 - abs(1 - (pixel_wave_pos / (wave_width * tail_length)))
-                        brightness = max(0, min(1, brightness))
-                
-                current_color = tuple(
-                    int(anim['background_color'][k] + (anim['color'][k] - anim['background_color'][k]) * brightness)
-                    for k in range(3)
-                )
-                
-                np[get_pixel_index(row, col)] = current_color
-        
-        np.write()
-        time.sleep_ms(10)
-        
-        if all_complete:
-            break
-
-def clear_display():
-    np.fill((0, 0, 0))
-    np.write()
-
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ POMODORO MODE                                                    │
-└──────────────────────────────────────────────────────────────────┘
-"""
-# Constants and State
-class PomodoroState:
-    SETUP = "setup"
-    ACTIVE = "active"
-    COMPLETE = "complete"
-
-pomodoro = {
-    "state": None,
-    "duration": 15,
-    "start_time": None,
-    "idle_timer": None,
-}
-
-# Core State Management
-def set_pomodoro_state(new_state):
-    """Helper to handle state transitions"""
-    pomodoro["state"] = new_state
-    if new_state == PomodoroState.SETUP:
-        pomodoro["duration"] = 15
-        pomodoro["idle_timer"] = time.ticks_ms()
-    elif new_state == PomodoroState.ACTIVE:
-        pomodoro["start_time"] = time.ticks_ms()
-    update_pomodoro_display()
-
-def pomodoro_initialize(current_time):
-    """Main update loop for pomodoro"""
-    if pomodoro["state"] == PomodoroState.SETUP:
-        update_pomodoro_display()
-        if pomodoro["idle_timer"] is not None:
-            idle_time = time.ticks_diff(current_time, pomodoro["idle_timer"])
-            if idle_time >= POMODORO_IDLE_TIMEOUT:
-                start_pomodoro()
-    elif pomodoro["state"] == PomodoroState.ACTIVE:
-        elapsed_ms = time.ticks_diff(current_time, pomodoro["start_time"])
-        elapsed_minutes = int(elapsed_ms / (60 * 1000))
-        if elapsed_minutes >= pomodoro["duration"]:
-            set_pomodoro_state(PomodoroState.COMPLETE)
-            rainbow_takeover(duration=0.5, gradient_speed=3)
-        else:
-            update_pomodoro_display()
-
-# Actions
-def start_pomodoro_setup():
-    """Enter setup mode with initial 15 minutes"""
-    set_pomodoro_state(PomodoroState.SETUP)
-
-def start_pomodoro():
-    """Start the actual pomodoro timer"""
-    set_pomodoro_state(PomodoroState.ACTIVE)
-
-def increment_setup_time():
-    """Add 15 minutes to setup time, wrap around to 15 when max is reached"""
-    if pomodoro["state"] != PomodoroState.SETUP:
-        return
-        
-    if pomodoro["duration"] >= 5 * 60:  # If at max (5 hours), reset to 15 minutes
-        pomodoro["duration"] = 15
-    else:
-        pomodoro["duration"] = min(pomodoro["duration"] + 15, 5 * 60)
-        
-    pomodoro["idle_timer"] = time.ticks_ms()
-    update_pomodoro_display()
-
-# Helper Functions
-def calculate_time_segments(minutes):
-    """Calculate hours and quarters for any given number of minutes"""
-    if minutes <= 60:
-        return {"hours": 0, "quarters": minutes // 15}
-    
-    hours = (minutes - 15) // 60
-    remaining_minutes = minutes - (hours * 60)
-    return {"hours": hours, "quarters": remaining_minutes // 15}
-
-def get_progress_bar_pixels():
-    """Return the standard progress bar pixel positions"""
-    pixels = []
-    for i in range(4):
-        pixels.append((3, 2 + i))  # Orange dots
-    for i in range(4):
-        pixels.append((4, 2 + i))  # Red dots
-    return pixels
-
-# Display Functions
-def pomodoro_show_intro():
-    """Show introduction animation when entering pomodoro mode"""
-    # Colors
-    background_color = (int(255 * BRIGHTNESS['BACKGROUND']), 0, 0)
-    border_color = (int(255 * BRIGHTNESS['BORDER_IDLE']), 0, 0)
-    quarter_color = (int(255 * BRIGHTNESS['QUARTER']), int(50 * BRIGHTNESS['QUARTER']), 0)
-    hour_color = (int(255 * BRIGHTNESS['HOUR']), 0, 0)
-    
-    # Fill background
-    np.fill(background_color)
-    np.write()
-    
-    # Get pixel groups
-    border_pixels = get_border_pixels()
-    quarter_pixels = [(3, 2 + i) for i in range(4)]
-    hour_pixels = [(4, 2 + i) for i in range(4)]
-    
-    # Define all animations
-    animations = [
-        {
-            'pixels': border_pixels,
-            'color': border_color,
-            'background_color': background_color,
-            'duration': 1500,
-            'delay': 0,
-            'stay_lit': True
-        },
-        {
-            'pixels': quarter_pixels,
-            'color': quarter_color,
-            'background_color': background_color,
-            'duration': 1000,
-            'delay': 400
-        },
-        {
-            'pixels': hour_pixels,
-            'color': hour_color,
-            'background_color': background_color,
-            'duration': 1000,
-            'delay': 800
-        }
-    ]
-    
-    # Run all animations concurrently
-    animate_pixels_wave_concurrent(animations)
-
-def update_pomodoro_display():
-    """Unified display function for both setup and active states"""
-    display_buffer = [(int(255 * BRIGHTNESS['BACKGROUND']), 0, 0)] * NUM_LEDS
-    current_ms = time.ticks_ms()
-    blink_on = (current_ms % 1000) < 500
-    
-    # Draw border
-    border_pixels = get_border_pixels()
-    
-    if pomodoro["state"] == PomodoroState.ACTIVE:
-        elapsed_ms = time.ticks_diff(current_ms, pomodoro["start_time"])
-        elapsed_minutes = int(elapsed_ms / (60 * 1000))
-        remaining_minutes = max(0, pomodoro["duration"] - elapsed_minutes)
-        progress_ratio = remaining_minutes / pomodoro["duration"]
-        pixels_to_light = int(len(border_pixels) * progress_ratio)
-        
-        # Active border shows progress
-        for i, (row, col) in enumerate(border_pixels):
-            color = (int(255 * BRIGHTNESS['BORDER_ACTIVE']), 0, 0) if i < pixels_to_light else (int(255 * BRIGHTNESS['BACKGROUND']), 0, 0)
-            display_buffer[get_pixel_index(row, col)] = color
-    else:
-        # Setup border is solid
-        for row, col in border_pixels:
-            display_buffer[get_pixel_index(row, col)] = (int(255 * BRIGHTNESS['BORDER_IDLE']), 0, 0)
-
-    # Calculate time segments to display
-    minutes = pomodoro["duration"]
-    if pomodoro["state"] == PomodoroState.ACTIVE:
-        minutes = remaining_minutes
-    
-    segments = calculate_time_segments(minutes)
-    progress_pixels = get_progress_bar_pixels()
-
-    # Display hours
-    for i in range(segments["hours"]):
-        display_buffer[get_pixel_index(*progress_pixels[i + 4])] = (int(255 * BRIGHTNESS['HOUR']), 0, 0)
-
-    # Display quarters
-    for i in range(segments["quarters"]):
-        display_buffer[get_pixel_index(*progress_pixels[i])] = (int(255 * BRIGHTNESS['QUARTER']), int(50 * BRIGHTNESS['QUARTER']), 0)
-
-    # Show blinking next position in setup mode
-    if pomodoro["state"] == PomodoroState.SETUP and blink_on:
-        next_pos = None
-        if segments["hours"] < 4 and segments["quarters"] == 4:
-            next_pos = progress_pixels[segments["hours"] + 4]
-        elif segments["quarters"] < 4:
-            next_pos = progress_pixels[segments["quarters"]]
-            
-        if next_pos and minutes < 300:  # Don't show preview beyond 5 hours
-            display_buffer[get_pixel_index(*next_pos)] = (int(255 * BRIGHTNESS['PREVIEW']), int(50 * BRIGHTNESS['PREVIEW']), 0)
-
-    np.fill((0, 0, 0))
-    for i in range(NUM_LEDS):
-        np[i] = display_buffer[i]
-    np.write()
-
-def rainbow_takeover(duration=1.5, steps=20, gradient_speed=2):
-    """
-    Performs a diagonal rainbow transition that grows in and continues animating
-    until button press, then restarts pomodoro setup.
-    """
-    # Capture current display state
-    initial_colors = [np[i] for i in range(NUM_LEDS)]
-    rainbow_offset = 0
-    step_delay = duration / steps
-
-    # Transition phase - grow in the rainbow
-    for step in range(steps + 1):
-        progress = step / steps
-        
-        for row in range(8):
-            for col in range(8):
-                if row + col > progress * 15:  # Diagonal coverage
-                    continue
+                try:
+                    os.remove('main.py.bak')
+                except:
+                    pass 
                     
-                idx = get_pixel_index(row, col)
-                start_color = initial_colors[idx]
-                target_color = wheel((rainbow_offset + (row + col) * 12) % 255)
-                
-                # Blend from current to rainbow
-                np[idx] = tuple(
-                    int(start + (target - start) * progress)
-                    for start, target in zip(start_color, target_color)
-                )
-                
-        np.write()
-        time.sleep(step_delay)
-        rainbow_offset = (rainbow_offset + gradient_speed) % 255
-
-    # Continue rainbow animation until button press
-    while True:
-        if button.value() == 0:  # Button press detected
-            time.sleep(0.2)  # Debounce delay
-            start_pomodoro_setup()
-            return
+                os.rename('main.py', 'main.py.bak')
+                os.rename('main.py.new', 'main.py')
+                print("Files renamed, waiting before reboot...")
             
-        rainbow_offset = (rainbow_offset + gradient_speed) % 255
-        
-        for row in range(8):
-            for col in range(8):
-                np[get_pixel_index(row, col)] = wheel(
-                    (rainbow_offset + (row + col) * 12) % 255
-                )
+            # Wait for 2 seconds while showing spinner
+            if time.ticks_diff(time.ticks_ms(), self._install_start_time) >= 2000:
+                print("Installation complete, rebooting...")
+                machine.reset()
                 
-        np.write()
-        time.sleep(FRAME_DELAY * 2)
-
-"""
-┌──────────────────────────────────────────────────────────────────┐
-│ MAIN PROGRAM LOOP                                               │
-└──────────────────────────────────────────────────────────────────┘
-"""
-
-if boot_button_check():
-    print("🎭 Entering boot mode")
-
-    # Show the character for immediate feedback
-    current_state = State.CHARACTERS
-    preview_char(selected_character)
+        except Exception as e:
+            self._handle_error("Installation failed", e)
     
-    # Reset button state to prevent unwanted triggers.
-    button_state["pressed"] = True
-    button_state["press_start"] = time.ticks_ms()
-    button_state["long_press_handled"] = False
-    button_state["ignore_next_release"] = True
-    
-    # Wait for release
-    while button.value() == 0:
-        time.sleep(0.05)
-else:
-    # Default startup
-    slide_in_char()
-    render_char((0, 255, 0), time.ticks_ms())
-    current_state = State.DEFAULT
+    def _handle_error(self, message, error):
+        """Centralized error handling with flashing animation."""
+        print(f"{message}: {error}")
+        self.error = str(error)
+        self.sub_state = UpdateSubState.ERROR
+        
+        # Flash red 3 times
+        for _ in range(3):
+            self._fill_solid_color((0, 0, 0))
+            time.sleep(0.2)
+            self._fill_solid_color(self.COLORS['ERROR'])
+            time.sleep(0.2)
+        
+        # Brief pause before reboot
+        time.sleep(0.5)
+        machine.reset()
 
-try:
+# --------------------------------------------------------------------------------
+# StateController - Manages switching and delegates logic
+# --------------------------------------------------------------------------------
+class StateController:
+    """Enhanced state controller with transition management."""
+    def __init__(self, np):
+        self.np = np
+        self.current_state = None
+        self.transition_data = {}  # For passing data between states
+        self.selected_character = self._load_saved_character()  # Load saved character
+    
+    def _load_saved_character(self):
+        """Load the saved character ID from storage."""
+        try:
+            with open("char_config.json", "r") as f:
+                saved_id = json.load(f)
+                # Find the index of the character with this ID
+                for idx, char_data in enumerate(CHARACTERS_DATA):
+                    if char_data['id'] == saved_id:
+                        return idx
+        except:
+            pass  # Any error, return default
+        return 0  # Default to first character
+
+    def save_character(self, index):
+        """Save the selected character ID to storage."""
+        try:
+            char_id = CHARACTERS_DATA[index]['id']
+            with open("char_config.json", "w") as f:
+                json.dump(char_id, f)
+            return True
+        except Exception as e:
+            print(f"Failed to save character config: {e}")
+            return False
+    
+    def switch_to(self, new_state, **kwargs):
+        """
+        Enhanced state transition with data passing.
+        
+        Args:
+            new_state: The new state to switch to
+            **kwargs: Optional data to pass to the new state
+        """
+        if self.current_state:
+            self.current_state.on_exit()
+            
+        self.current_state = new_state
+        self.current_state.on_enter(**kwargs)
+    
+    def update(self, current_time):
+        if self.current_state:
+            self.current_state.update(current_time)
+    
+    def handle_short_press(self):
+        if self.current_state:
+            self.current_state.handle_short_press()
+    
+    def handle_long_press(self):
+        if self.current_state:
+            self.current_state.handle_long_press()
+    
+    def update_display(self):
+        if self.current_state:
+            self.current_state.update_display()
+
+# --------------------------------------------------------------------------------
+# Main Loop
+# --------------------------------------------------------------------------------
+def main():
+    # Initialize hardware
+    np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
+    button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
+    controller = StateController(np)
+    
+    # Boot sequence: check if button is held to jump to CharactersState or UpdateState
+    boot_start = time.ticks_ms()
+    if button.value() == 0:  # If button is held during boot
+        # Immediately go to CharactersState
+        # controller.switch_to(CharactersState(controller))
+        # controller.update_display()
+        
+        # print("Entering CHARACTERS mode (boot override)")
+        controller.switch_to(CharactersState(controller))
+        controller.update_display()
+        print("Entering CHARACTERS mode (boot override)")
+        
+        # Then wait to see if it becomes an update check
+        while button.value() == 0:  # While button is still held
+            if time.ticks_diff(time.ticks_ms(), boot_start) >= UPDATE_CHECK_TIME:
+                # Switch to UpdateState
+                controller.switch_to(UpdateState(controller))
+                # The UpdateState immediately resets the board in on_enter()
+                # If we somehow didn't reset, break anyway
+                break
+
+    else:
+        # Default startup - add this line
+        controller.switch_to(DefaultState(controller))
+        print("Starting in DEFAULT mode")
+    
+    # Button handling variables
+    button_pressed = False
+    press_start_time = 0
+    long_press_handled = False
+    
+    # Main loop
     while True:
         current_time = time.ticks_ms()
-        handle_button_events(current_time)
         
-        # If state is Pomodoro, display the Pomodoro.
-        if current_state == State.POMODORO:
-            pomodoro_initialize(current_time)
-            
-        # If state is Default, display the status
-        elif current_state == State.DEFAULT:
-            if status_state == State.Default.SOCIAL:
-                render_char_rainbow(rainbow_offset, current_time)
-                rainbow_offset = (rainbow_offset + 2) % 255
-                time.sleep(FRAME_DELAY)
+        # Update the current state (for time-based transitions)
+        controller.update(current_time)
+        
+        # Check button status
+        if button.value() == 0:  # Button is pressed
+            if not button_pressed:
+                button_pressed = True
+                press_start_time = current_time
             else:
-                color = (0, 255, 0) if status_state == State.Default.AVAILABLE else (255, 0, 0)
-                render_char(color, current_time)
-                time.sleep(0.05)
+                # Check for long press
+                press_duration = time.ticks_diff(current_time, press_start_time)
+                if press_duration >= LONG_PRESS_TIME and not long_press_handled:
+                    controller.handle_long_press()
+                    long_press_handled = True
+        else:  # Button is released
+            if button_pressed:
+                press_duration = time.ticks_diff(current_time, press_start_time)
+                if press_duration < LONG_PRESS_TIME:
+                    controller.handle_short_press()
+                long_press_handled = False
+                button_pressed = False
+        
+        # Update LED display
+        controller.update_display()
+        
+        # Small delay to prevent busy waiting
+        time.sleep(0.01)
 
-except KeyboardInterrupt:
-    clear_display()
-    print("\nProgram terminated by user")
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nProgram terminated by user")
