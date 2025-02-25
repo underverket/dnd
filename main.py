@@ -9,6 +9,7 @@ import neopixel
 import time
 import json
 import random
+import ntptime
 
 # --------------------------------------------------------------------------------
 # Hardware Configuration
@@ -22,19 +23,71 @@ BRIGHTNESS = 0.1
 # Timing Configuration
 # --------------------------------------------------------------------------------
 LONG_PRESS_TIME = 700       # 0.7 seconds for long press
-UPDATE_CHECK_TIME = 4000    # 8 seconds for update check
+UPDATE_CHECK_TIME = 4000    # 4 seconds for update check
 INTRO_DURATION = 1000       # 1 second for intro animations
 POMODORO_SETUP_TIMEOUT = 5000  # 5 seconds before auto-starting
 INTRO_DURATION = 5000       # 5 seconds for intro animations
 
+# Scheduled update check
+SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
+SCHEDULED_FRIYAY_CHECK = 10000  # 1 minute
+
 # GitHub OTA Update Configuration
-FORCE_UPDATE = True  # Set this to True to force update regardless of version
-WIFI_TIMEOUT_SECONDS = 5    # Seconds to wait before timeout
+FORCE_UPDATE = False  # Set this to True to force update regardless of version
+WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
-CURRENT_VERSION = "1.0.4"
+WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
+CURRENT_VERSION = "1.0.6"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
+
+# --------------------------------------------------------------------------------
+# WiFi Management
+# --------------------------------------------------------------------------------
+class WiFiManager:
+    """Centralized WiFi connection management."""
+    
+    @staticmethod
+    def start_connection():
+        """Initialize WiFi connection process."""
+        try:
+            from wifi_config import WIFI_SSID, WIFI_PASSWORD
+            if not WIFI_SSID or not WIFI_PASSWORD:
+                raise Exception("No WiFi credentials")
+                
+            wlan = network.WLAN(network.STA_IF)
+            if wlan.isconnected():
+                return True, "Already connected"
+                
+            print(f"Connecting to WiFi: {WIFI_SSID}")
+            wlan.active(True)
+            wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+            return True, WIFI_SSID
+            
+        except ImportError:
+            return False, "No WiFi credentials file"
+        except Exception as e:
+            return False, str(e)
+    
+    @staticmethod
+    def check_connection():
+        """Check current connection status."""
+        wlan = network.WLAN(network.STA_IF)
+        return wlan.isconnected()
+    
+    @staticmethod
+    def disconnect():
+        """Safely disconnect from WiFi."""
+        if WIFI_DISCONNECT_AFTER_USE:
+            try:
+                wlan = network.WLAN(network.STA_IF)
+                if wlan.isconnected():
+                    wlan.disconnect()
+                    wlan.active(False)
+                    print("WiFi disconnected")
+            except Exception as e:
+                print(f"WiFi disconnect error: {e}")
 
 # --------------------------------------------------------------------------------
 # Base State Class
@@ -465,20 +518,28 @@ class DefaultSubState:
     AVAILABLE = "available"
     BUSY = "busy"
     SOCIAL = "social"
+    FRIYAY = "friyay"
     
-    # States that we cycle through with short press
-    CYCLE_STATES = [AVAILABLE, BUSY, SOCIAL]
+    # Base states that we always cycle through
+    BASE_CYCLE_STATES = [AVAILABLE, BUSY, SOCIAL]
+    
+    # Dynamic cycle states (will be updated at runtime)
+    CYCLE_STATES = BASE_CYCLE_STATES.copy()
 
 class DefaultState(BaseState):
     """Main 'Default' state with sub-states: INTRO, AVAILABLE, BUSY, SOCIAL."""
 
     ANIMATION_DURATION = 600  # Total duration in milliseconds
-    
+
     def __init__(self, controller):
         super().__init__(controller)
         self.sub_state = DefaultSubState.INTRO
         self.character = Character(CHARACTERS_DATA[controller.selected_character])
         self.animation_start = None
+
+        # Initialize FRIYAY-related attributes
+        self.friyay_scroll_position = 0
+        self.last_scroll_time = 0
     
     def on_enter(self):
         print("Entering DefaultState / INTRO")
@@ -502,7 +563,12 @@ class DefaultState(BaseState):
     def handle_short_press(self):
         if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
             # Find current state in cycle and move to next
-            current_idx = DefaultSubState.CYCLE_STATES.index(self.sub_state)
+            try:
+                current_idx = DefaultSubState.CYCLE_STATES.index(self.sub_state)
+            except ValueError:
+                # If current state not in cycle (shouldn't happen), go to first state
+                current_idx = -1
+                
             next_idx = (current_idx + 1) % len(DefaultSubState.CYCLE_STATES)
             self.sub_state = DefaultSubState.CYCLE_STATES[next_idx]
             print(f"Short press: Default → {self.sub_state}")
@@ -532,6 +598,9 @@ class DefaultState(BaseState):
                 brightness=BRIGHTNESS,
                 row_offset=int(row_offset)
             )
+        elif self.sub_state == DefaultSubState.FRIYAY:
+            # Render the scrolling "FRIYAY!" text
+            self._render_scrolling_text(self.FRIYAY_TEXT, color=(255, 255, 0))  # Yellow text
         else:
             # Normal rendering
             self.character.render(
@@ -539,6 +608,69 @@ class DefaultState(BaseState):
                 np=self.controller.np,
                 brightness=BRIGHTNESS
             )
+    
+    # Add these new properties
+    FRIYAY_TEXT = "FRIYAY!"
+    friyay_scroll_position = 0
+    last_scroll_time = 0
+    SCROLL_SPEED = 100  # ms between scroll steps
+    
+    def _render_scrolling_text(self, text, color=(255, 255, 0)):
+        # First create a rainbow background
+        rainbow_offset = (time.ticks_ms() // 15) % 256  # Slower color cycling
+        for row in range(8):
+            for col in range(8):
+                # Create a diagonal rainbow pattern
+                hue = (rainbow_offset + (row + col) * 8) % 256
+                bg_color = Character._wheel(hue)
+                # Dim background for contrast
+                bg_color = tuple(int(c * BRIGHTNESS) for c in bg_color)
+                pixel_index = self._get_pixel_index(row, col)
+                self.controller.np[pixel_index] = bg_color
+
+        font = {
+            'F': [(0,0), (0,1), (0,2), (0,3), (1,0), (2,0), (3,0), (3,1), (4,0), (5,0)],
+            'R': [(0,0), (0,1), (0,2), (0,3), (1,0), (1,3), (2,0), (2,3), (3,0), (3,1), (3,2), (4,0), (4,2), (5,0), (5,3)],
+            'I': [(0,1), (1,1), (2,1), (3,1), (4,1), (5,1)],
+            'Y': [(0,0), (0,4), (1,0), (1,4), (2,1), (2,2), (2,3), (3,2), (4,2), (5,2)],
+            'A': [(0,1), (0,2), (0,3), (1,0), (1,4), (2,0), (2,4), (3,0), (3,1), (3,2), (3,3), (3,4), (4,0), (4,4), (5,0), (5,4)],
+            '!': [(0,2), (1,2), (2,2), (3,2), (5,2)]
+        }
+        
+        # Calculate character widths
+        char_widths = {char: max(col for _, col in pixels) - min(col for _, col in pixels) + 1
+                    for char, pixels in font.items()}
+        
+        # Total width of the text (including 1px gap between characters) plus 8px extra padding
+        total_width = sum(char_widths.get(char, 0) + 1 for char in text) + 8
+        
+        # Update scroll position
+        current_time = time.ticks_ms()
+        if time.ticks_diff(current_time, self.last_scroll_time) > self.SCROLL_SPEED:
+            self.friyay_scroll_position = (self.friyay_scroll_position + 1) % total_width
+            self.last_scroll_time = current_time
+        
+        # Calculate starting position
+        x_pos = 8 - self.friyay_scroll_position
+        vertical_offset = 1  # Move down 1px
+        
+        # Make text bright white for maximum contrast
+        text_color = (int(255 * BRIGHTNESS), int(255 * BRIGHTNESS), int(255 * BRIGHTNESS))
+        
+        # Render the text only once
+        text_x_pos = x_pos
+        for char in text:
+            if char in font:
+                min_col = min(col for _, col in font[char])
+                for row, col in font[char]:
+                    screen_row = row + vertical_offset
+                    screen_col = text_x_pos + (col - min_col)
+                    if 0 <= screen_row < 8 and 0 <= screen_col < 8:
+                        pixel_index = self._get_pixel_index(screen_row, screen_col)
+                        self.controller.np[pixel_index] = text_color
+                text_x_pos += char_widths[char] + 1  # Add a 1px gap between characters
+        
+        self.controller.np.write()
 
 # --------------------------------------------------------------------------------
 # CharactersState
@@ -682,7 +814,7 @@ class UpdateState(BaseState):
     COLORS = {
         'CONNECTING': (0, 0, 255),    # Blue
         'CHECKING': (128, 0, 255),    # Purple
-        'DOWNLOADING': (255, 0, 0),   # Red
+        'DOWNLOADING': (80, 0, 0),    # Red
         'INSTALLING': (255, 128, 0),  # Orange
         'ERROR': (255, 0, 0),         # Red
     }
@@ -756,30 +888,22 @@ class UpdateState(BaseState):
             self._handle_install()
 
     def _handle_wifi_connection(self):
-        """Handle WiFi connection attempt."""
+        """Handle WiFi connection attempt with animation."""
         try:
             # Only try to connect if we haven't started yet
             if not hasattr(self, '_wifi_connection_started'):
                 self._wifi_connection_started = True
-                try:
-                    from wifi_config import WIFI_SSID, WIFI_PASSWORD
-                    print(f"🔍 Loaded Wi-Fi config - SSID: {WIFI_SSID}")
-                except ImportError:
-                    raise Exception("No WiFi credentials file")
-                    
-                if not WIFI_SSID or not WIFI_PASSWORD:
-                    raise Exception("No WiFi credentials")
-                    
-                wlan = network.WLAN(network.STA_IF)
-                wlan.active(True)
-                wlan.connect(WIFI_SSID, WIFI_PASSWORD)
                 self._connection_start_time = time.ticks_ms()
+                
+                # Use shared WiFi connection start
+                success, message = WiFiManager.start_connection()
+                if not success:
+                    raise Exception(message)
             
-            # Check connection status
-            wlan = network.WLAN(network.STA_IF)
-            if wlan.isconnected():
+            # Check connection status using shared function
+            if WiFiManager.check_connection():
                 print("WiFi connected!")
-                delattr(self, '_wifi_connection_started')  # Reset for next time
+                delattr(self, '_wifi_connection_started')
                 self.sub_state = UpdateSubState.CHECKING
             elif time.ticks_diff(time.ticks_ms(), self._connection_start_time) > WIFI_TIMEOUT_SECONDS * 1000:
                 raise Exception("WiFi connection timeout")
@@ -920,6 +1044,9 @@ class UpdateState(BaseState):
                 os.rename('main.py', 'main.py.bak')
                 os.rename('main.py.new', 'main.py')
                 print("Files renamed, waiting before reboot...")
+
+                # Ensure WiFi is disconnected before reboot
+                WiFiManager.disconnect()
             
             # Wait for 2 seconds while showing spinner
             if time.ticks_diff(time.ticks_ms(), self._install_start_time) >= 2000:
@@ -947,6 +1074,120 @@ class UpdateState(BaseState):
         machine.reset()
 
 # --------------------------------------------------------------------------------
+# Time Management
+# --------------------------------------------------------------------------------
+class TimeManager:
+    """Manages time synchronization with NTP servers with timezone support."""
+    
+    def __init__(self):
+        self.rtc = machine.RTC()
+        self.is_synced = False
+        self.timezone_offset = 1  # Sweden is UTC+1 by default (CET)
+    
+    def sync_time(self):
+        """Synchronize RTC with network time and adjust for timezone."""
+        try:
+            # Start connection
+            success, message = WiFiManager.start_connection()
+            if not success:
+                print(f"WiFi connection failed: {message}")
+                return False
+                
+            # Wait for connection with timeout
+            start_time = time.ticks_ms()
+            while not WiFiManager.check_connection():
+                if time.ticks_diff(time.ticks_ms(), start_time) > WIFI_TIMEOUT_SECONDS * 1000:
+                    print("WiFi connection timeout")
+                    return False
+                time.sleep(0.1)
+                
+            # Proceed with time sync to get UTC time
+            ntptime.settime()
+            
+            # Get and adjust for timezone
+            datetime = self.rtc.datetime()
+            y, mo, d, wd, h, mi, s, ms = datetime
+            
+            # Apply timezone offset (with simplified DST calculation)
+            offset_hours = self.timezone_offset
+            if self._is_dst_simplified(mo, d):
+                offset_hours += 1
+            
+            h = (h + offset_hours) % 24
+            
+            # Update RTC with adjusted time
+            self.rtc.datetime((y, mo, d, wd, h, mi, s, ms))
+            self.is_synced = True
+            
+            # Get and display current time
+            print(f"Time synced: {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}:{s:02d}")
+            print(f"Timezone: UTC+{offset_hours} ({'CEST' if offset_hours > 1 else 'CET'})")
+            return True
+            
+        except Exception as e:
+            print(f"Time sync failed: {e}")
+            return False
+        finally:
+            WiFiManager.disconnect()
+    
+    def _is_dst_simplified(self, month, day):
+        """
+        Simplified DST calculation for EU:
+        - Last Sunday of March (approx. March 25-31) to 
+        - Last Sunday of October (approx. October 25-31)
+        
+        This is not 100% accurate for edge cases, but works well enough
+        for most practical purposes.
+        """
+        if month < 3 or month > 10:  # Jan, Feb, Nov, Dec
+            return False
+        if month > 3 and month < 10:  # Apr to Sep
+            return True
+        if month == 3 and day >= 25:  # Late March (approximate)
+            return True
+        if month == 10 and day < 25:  # Early October (approximate)
+            return True
+        return False
+    
+    def is_time_set(self):
+        """Check if the time has been set reasonably."""
+        y, _, _, _, _, _, _, _ = self.rtc.datetime()
+        # If year is before 2023, the time is probably not set
+        return y >= 2023 and self.is_synced
+    
+    def get_datetime(self):
+        """Get current datetime as a tuple (y, mo, d, h, mi, s)."""
+        dt = self.rtc.datetime()
+        return dt[0], dt[1], dt[2], dt[4], dt[5], dt[6]  # Year, month, day, hour, minute, second
+
+    def is_midnight(self):
+        """Check if it's update time (03:00-03:30)."""
+        dt = self.rtc.datetime()
+        _, _, _, _, h, m, _, _ = dt
+
+        # Debug override: Uncomment to force test time interval between 17:00 and 17:10
+        # return h == 17 and m < 10
+
+        # If after 3 AM and before 3:30 AM
+        return h == 3 and m < 45
+    
+    def is_friyay_time(self):
+        """Check if it's FRIYAY time (Friday 15:00 to Saturday 02:00)."""
+
+        # Check if time is set, otherwise weekdays can be wrong.
+        if not self.is_time_set():
+            return False
+            
+        dt = self.rtc.datetime()
+        _, _, _, weekday, hour, minute, _, _ = dt
+
+        # Debug override: Uncomment to force test time interval between 17:00 and 17:10
+        # return hour == 19 and minute < 6
+         
+        # If after Friday (4) 15:00 and before Saturday (5) 02:00 AM
+        return (weekday == 4 and hour >= 15) or (weekday == 5 and hour < 2)
+    
+# --------------------------------------------------------------------------------
 # StateController - Manages switching and delegates logic
 # --------------------------------------------------------------------------------
 class StateController:
@@ -956,6 +1197,9 @@ class StateController:
         self.current_state = None
         self.transition_data = {}  # For passing data between states
         self.selected_character = self._load_saved_character()  # Load saved character
+        self.time_manager = TimeManager()  # Add time manager
+        self.last_day_checked = None  # For tracking latest updated day
+        self.last_friyay_check = time.ticks_ms()  # Add this line
     
     def _load_saved_character(self):
         """Load the saved character ID from storage."""
@@ -1011,6 +1255,71 @@ class StateController:
         if self.current_state:
             self.current_state.update_display()
 
+    def check_scheduled_updates(self):
+        """Check if it's time for a scheduled update."""
+        print("Checking for scheduled updates...")
+
+        if not self.time_manager.is_time_set():
+            print("Time not set, skipping scheduled update check")
+            return  # Can't check if time isn't set
+        
+        # Get current date
+        current_date = self.time_manager.get_datetime()[:3]
+
+        # Only proceed if:
+        # 1. It's update time (3:00-3:30)
+        # 2. We haven't updated today
+        if (self.time_manager.is_midnight() and 
+            current_date != self.last_day_checked):
+            
+            print("🔄 Update time detected - initiating scheduled update")
+            self.last_day_checked = current_date
+            self.switch_to(UpdateState(self))
+
+    def check_scheduled_friyay(self):
+        """Check if it's time for FRIYAY mode."""
+        print("Checking for friyay...")
+        if not self.time_manager.is_time_set():
+            return  # Can't check if time isn't set
+        
+        # Skip if we're not in default state
+        if not isinstance(self.current_state, DefaultState):
+            return
+                
+        # Get current default state
+        default_state = self.current_state
+        
+        # Skip intro animation
+        if default_state.sub_state == DefaultSubState.INTRO:
+            return
+        
+        # Check if it's FRIYAY time
+        is_friyay_time = self.time_manager.is_friyay_time()
+        
+        # Update cycle states based on whether it's Friyay time
+        if is_friyay_time:
+            # Add FRIYAY to cycle if it's not there
+            if DefaultSubState.FRIYAY not in DefaultSubState.CYCLE_STATES:
+                DefaultSubState.CYCLE_STATES = DefaultSubState.BASE_CYCLE_STATES + [DefaultSubState.FRIYAY]
+                print("FRIYAY mode added to cycle!")
+                
+                # Only auto-switch to FRIYAY if we're not in BUSY and not already in FRIYAY
+                if (default_state.sub_state != DefaultSubState.BUSY and 
+                    default_state.sub_state != DefaultSubState.FRIYAY):
+                    print("It's FRIYAY time! Switching to FRIYAY mode")
+                    default_state.sub_state = DefaultSubState.FRIYAY
+        else:
+            # Remove FRIYAY from cycle if it's there
+            if DefaultSubState.FRIYAY in DefaultSubState.CYCLE_STATES:
+                DefaultSubState.CYCLE_STATES = DefaultSubState.BASE_CYCLE_STATES.copy()
+                print("FRIYAY mode removed from cycle!")
+                
+                # If we're in FRIYAY mode, switch to AVAILABLE
+                if default_state.sub_state == DefaultSubState.FRIYAY:
+                    default_state.sub_state = DefaultSubState.AVAILABLE
+                    print("Switching from FRIYAY to AVAILABLE (no longer Friyay time)")
+
+
 # --------------------------------------------------------------------------------
 # Main Loop
 # --------------------------------------------------------------------------------
@@ -1019,68 +1328,109 @@ def main():
     np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
     button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
     controller = StateController(np)
+
+    # Initialize state variables
+    button_state = {
+        'pressed': False,
+        'press_start': 0,
+        'long_press_handled': False
+    }
     
-    # Boot sequence: check if button is held to jump to CharactersState or UpdateState
-    boot_start = time.ticks_ms()
-    if button.value() == 0:  # If button is held during boot
-        # Immediately go to CharactersState
-        # controller.switch_to(CharactersState(controller))
-        # controller.update_display()
-        
-        # print("Entering CHARACTERS mode (boot override)")
+    background_state = {
+        'intro_complete': False,
+        'wifi_started': False,
+        'time_synced': False,
+        'wifi_start_time': None,
+        'last_schedule_check': time.ticks_ms(),
+        'last_friyay_check': time.ticks_ms()
+    }
+
+    # Handle boot sequence
+    if button.value() == 0:  # Boot with button held
         controller.switch_to(CharactersState(controller))
         controller.update_display()
         print("Entering CHARACTERS mode (boot override)")
         
-        # Then wait to see if it becomes an update check
-        while button.value() == 0:  # While button is still held
+        boot_start = time.ticks_ms()
+        while button.value() == 0:
             if time.ticks_diff(time.ticks_ms(), boot_start) >= UPDATE_CHECK_TIME:
-                # Switch to UpdateState
                 controller.switch_to(UpdateState(controller))
-                # The UpdateState immediately resets the board in on_enter()
-                # If we somehow didn't reset, break anyway
                 break
-
-    else:
-        # Default startup - add this line
+    else:  # Normal boot
         controller.switch_to(DefaultState(controller))
         print("Starting in DEFAULT mode")
-    
-    # Button handling variables
-    button_pressed = False
-    press_start_time = 0
-    long_press_handled = False
-    
+
     # Main loop
     while True:
         current_time = time.ticks_ms()
         
-        # Update the current state (for time-based transitions)
+        # Handle background tasks
+        if isinstance(controller.current_state, DefaultState):
+            # Track intro completion
+            if not background_state['intro_complete']:
+                if controller.current_state.sub_state != DefaultSubState.INTRO:
+                    background_state['intro_complete'] = True
+                    background_state['wifi_start_time'] = current_time
+            
+            # Handle WiFi and time sync
+            elif not background_state['time_synced']:
+                if not background_state['wifi_started']:
+                    success, message = WiFiManager.start_connection()
+                    background_state['wifi_started'] = True
+                    if not success:
+                        print(f"Background WiFi connection failed: {message}")
+                        background_state['time_synced'] = True
+                
+                elif WiFiManager.check_connection():
+                    if controller.time_manager.sync_time():
+                        print("Background time sync successful")
+                    else:
+                        print("Background time sync failed")
+                    background_state['time_synced'] = True
+                    WiFiManager.disconnect()
+                
+                elif time.ticks_diff(current_time, background_state['wifi_start_time']) > WIFI_TIMEOUT_SECONDS * 1000:
+                    print("Background WiFi connection timed out")
+                    background_state['time_synced'] = True
+
+        # Update state and check schedules
         controller.update(current_time)
-        
-        # Check button status
-        if button.value() == 0:  # Button is pressed
-            if not button_pressed:
-                button_pressed = True
-                press_start_time = current_time
-            else:
-                # Check for long press
-                press_duration = time.ticks_diff(current_time, press_start_time)
-                if press_duration >= LONG_PRESS_TIME and not long_press_handled:
-                    controller.handle_long_press()
-                    long_press_handled = True
-        else:  # Button is released
-            if button_pressed:
-                press_duration = time.ticks_diff(current_time, press_start_time)
-                if press_duration < LONG_PRESS_TIME:
-                    controller.handle_short_press()
-                long_press_handled = False
-                button_pressed = False
-        
-        # Update LED display
+        if time.ticks_diff(current_time, background_state['last_schedule_check']) >= SCHEDULED_UPDATE_CHECK:
+            controller.check_scheduled_updates()
+            background_state['last_schedule_check'] = current_time
+
+        # Check if it's FRIYAY time
+        if time.ticks_diff(current_time, background_state['last_friyay_check']) >= SCHEDULED_FRIYAY_CHECK:
+            controller.check_scheduled_friyay()
+            background_state['last_friyay_check'] = current_time
+
+        # Handle button input
+        if isinstance(controller.current_state, DefaultState) and controller.current_state.sub_state == DefaultSubState.INTRO:
+            # Ignore button during intro, but reset state on release
+            if button.value() == 1:
+                button_state['pressed'] = False
+                button_state['long_press_handled'] = False
+        else:
+            # Normal button handling
+            if button.value() == 0:  # Pressed
+                if not button_state['pressed']:
+                    button_state['pressed'] = True
+                    button_state['press_start'] = current_time
+                else:
+                    press_duration = time.ticks_diff(current_time, button_state['press_start'])
+                    if press_duration >= LONG_PRESS_TIME and not button_state['long_press_handled']:
+                        controller.handle_long_press()
+                        button_state['long_press_handled'] = True
+            else:  # Released
+                if button_state['pressed']:
+                    press_duration = time.ticks_diff(current_time, button_state['press_start'])
+                    if press_duration < LONG_PRESS_TIME:
+                        controller.handle_short_press()
+                    button_state['pressed'] = False
+                    button_state['long_press_handled'] = False
+
+        # Update display
         controller.update_display()
-        
-        # Small delay to prevent busy waiting
         time.sleep(0.01)
 
 if __name__ == '__main__':
