@@ -37,7 +37,7 @@ FORCE_UPDATE = False  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.6"
+CURRENT_VERSION = "1.0.7"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -1194,6 +1194,11 @@ class StateController:
     """Enhanced state controller with transition management."""
     def __init__(self, np):
         self.np = np
+
+        # Clear display on initialization
+        self.np.fill((0, 0, 0))
+        self.np.write()
+
         self.current_state = None
         self.transition_data = {}  # For passing data between states
         self.selected_character = self._load_saved_character()  # Load saved character
@@ -1326,6 +1331,11 @@ class StateController:
 def main():
     # Initialize hardware
     np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
+
+    # IMMEDIATE CLEAR - turn off all LEDs as the very first action
+    np.fill((0, 0, 0))
+    np.write()
+
     button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
     controller = StateController(np)
 
