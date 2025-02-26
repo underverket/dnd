@@ -408,7 +408,7 @@ CHARACTERS_RAW = [
                         "_ _ _ _ _ _ _ _",
                         "_ _ _ _ _ _ _ _",
                         "_ _ _ _ _ _ _ _",
-                        "_ _ X _ _ _ _ _",
+                        "_ _ X _ _ X _ _",
                         "_ _ X _ _ X _ _",
                         "_ _ _ _ _ _ _ _",
                         "_ _ _ _ _ _ _ _"
@@ -1004,6 +1004,12 @@ class UpdateState(BaseState):
                 raise Exception("No update URL")
 
             print("Starting download...")
+
+            # Pre-allocate and immediately free memory to reduce fragmentation
+            # This creates a more contiguous memory space before the download
+            # large_buffer = bytearray(1024)  # Pre-allocate
+            # del large_buffer            # Free it immediately
+            # gc.collect()                # Compact memory
     
             # Get content length first
             response = urequests.get(url, stream=True)
