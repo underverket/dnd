@@ -8,8 +8,8 @@ import machine
 import neopixel
 import time
 import json
-import random
 import ntptime
+import gc
 
 # --------------------------------------------------------------------------------
 # Hardware Configuration
@@ -33,11 +33,11 @@ SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
 SCHEDULED_FRIYAY_CHECK = 10000  # 1 minute
 
 # GitHub OTA Update Configuration
-FORCE_UPDATE = False  # Set this to True to force update regardless of version
+FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.7"
+CURRENT_VERSION = "1.0.8"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -829,7 +829,7 @@ class UpdateState(BaseState):
         self.error = None
         self.spinner_position = 0
         self.last_spinner_update = time.ticks_ms()
-
+    
     def _update_spinner(self, base_color):
         """Update spinner animation."""
         current_time = time.ticks_ms()
@@ -949,16 +949,28 @@ class UpdateState(BaseState):
         except Exception as e:
             self._handle_error("Version check failed", e)
             
+    # def _fetch_github_raw(self):
+    #     """Fetch version info from GitHub."""
+    #     try:
+    #         response = urequests.get(UPDATE_URL)
+    #         if response.status_code == 200:
+    #             content = response.text
+    #             response.close()
+    #             return content.strip()
+    #         response.close()
+    #         return None
+    #     except Exception as e:
+    #         print(f"GitHub fetch failed: {e}")
+    #         return None
+        
     def _fetch_github_raw(self):
-        """Fetch version info from GitHub."""
         try:
             response = urequests.get(UPDATE_URL)
+            content = None
             if response.status_code == 200:
-                content = response.text
-                response.close()
-                return content.strip()
-            response.close()
-            return None
+                content = response.text  # Store before closing
+            response.close()  # Always close even on error
+            return content.strip() if content else None
         except Exception as e:
             print(f"GitHub fetch failed: {e}")
             return None
@@ -991,6 +1003,8 @@ class UpdateState(BaseState):
             if not url:
                 raise Exception("No update URL")
 
+            print("Starting download...")
+    
             # Get content length first
             response = urequests.get(url, stream=True)
             if response.status_code != 200:
@@ -998,27 +1012,41 @@ class UpdateState(BaseState):
 
             total_size = int(response.headers.get('Content-Length', 0))
             bytes_downloaded = 0
-            all_content = []
 
-            while True:
-                chunk = response.raw.read(64)  # Read in smaller chunks
-                if not chunk:
-                    break
+            
+            # Open file for immediate writing
+            with open('main.py.new', 'wb') as f:
+                # Use much smaller chunks (16 bytes)
+                chunk_size = 16
 
-                bytes_downloaded += len(chunk)
-                all_content.append(chunk)
-                
-                # Update progress bar
-                progress = bytes_downloaded / total_size
-                self._fill_progress_bar(self.COLORS['DOWNLOADING'], progress)
+                 # Progress tracking optimization
+                progress_interval = 512  # Only update UI every 512 bytes
+                last_progress_update = 0
+
+                while True:
+                    chunk = response.raw.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    # Write each chunk immediately
+                    f.write(chunk)
+                    bytes_downloaded += len(chunk)
+
+                    # Update progress bar LESS frequently (not every 256 bytes)
+                    if bytes_downloaded - last_progress_update >= progress_interval:
+                        progress = bytes_downloaded / total_size
+                        self._fill_progress_bar(self.COLORS['DOWNLOADING'], progress)
+                        last_progress_update = bytes_downloaded
+
+                        # Print memory every 5KB
+                        if bytes_downloaded % 5120 == 0:
+                            print("Downloaded:", bytes_downloaded, "/", total_size, "bytes")
+                        
+                        # Force garbage collection after UI updates
+                        gc.collect()
 
             response.close()
             
-            # Write the complete file
-            content = b''.join(all_content).decode()
-            with open('main.py.new', 'w') as f:
-                f.write(content)
-
             # Show complete state briefly
             self._fill_progress_bar(self.COLORS['DOWNLOADING'], 1.0)
             time.sleep(0.3)
