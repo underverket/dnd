@@ -26,7 +26,6 @@ LONG_PRESS_TIME = 700       # 0.7 seconds for long press
 UPDATE_CHECK_TIME = 4000    # 4 seconds for update check
 INTRO_DURATION = 1000       # 1 second for intro animations
 POMODORO_SETUP_TIMEOUT = 5000  # 5 seconds before auto-starting
-INTRO_DURATION = 5000       # 5 seconds for intro animations
 
 # Scheduled update check
 SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
@@ -37,7 +36,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.8"
+CURRENT_VERSION = "1.0.9"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -153,19 +152,24 @@ class BaseState:
 # --------------------------------------------------------------------------------
 # Character Definition and Processing
 # --------------------------------------------------------------------------------
-class CharacterDefinition:
-    """Convert ASCII art style definitions into pixel data"""
-    @staticmethod
-    def process_layer(ascii_art):
-        pixels = []
-        for row, line in enumerate(ascii_art):
-            for col, char in enumerate(line.split()):
-                if char == 'X':
-                    pixels.append((row, col))
-        return pixels
+def decode_pattern_to_pixels(hex_pattern):
+    """Convert hex pattern directly to pixel coordinates"""
+    pixels = []
+    for row in range(8):
+        # Get the byte for this row
+        byte = int(hex_pattern[row*2:row*2+2], 16)
+        
+        # Check each bit
+        for col in range(8):
+            if byte & (1 << (7-col)):
+                pixels.append((row, col))
+    return pixels
 
+class CharacterDefinition:
+    """Process compressed character definitions into pixel data"""
     @staticmethod
     def create_character(data):
+            
         """Convert a character definition into processed pixel data"""
         character = {
             'id': data['id'],
@@ -173,9 +177,9 @@ class CharacterDefinition:
             'pixels': []
         }
         
-        # Process standard layers if they exist
+        # Process body pattern
         if 'body' in data:
-            body_pixels = CharacterDefinition.process_layer(data['body'])
+            body_pixels = decode_pattern_to_pixels(data['body'])
             for pixel in body_pixels:
                 character['pixels'].append({
                     'row': pixel[0],
@@ -183,8 +187,9 @@ class CharacterDefinition:
                     'type': 'body'
                 })
                 
+        # Process highlight layer
         if 'hl' in data:
-            highlight_pixels = CharacterDefinition.process_layer(data['hl'])
+            highlight_pixels = decode_pattern_to_pixels(data['hl'])
             for pixel in highlight_pixels:
                 character['pixels'].append({
                     'row': pixel[0],
@@ -192,8 +197,9 @@ class CharacterDefinition:
                     'type': 'highlight'
                 })
                 
+        # Process shadow layer
         if 'sdw' in data:
-            shadow_pixels = CharacterDefinition.process_layer(data['sdw'])
+            shadow_pixels = decode_pattern_to_pixels(data['sdw'])
             for pixel in shadow_pixels:
                 character['pixels'].append({
                     'row': pixel[0],
@@ -201,19 +207,30 @@ class CharacterDefinition:
                     'type': 'shadow'
                 })
         
-        # Handle custom colored pixels if they exist
+        # Handle custom colored pixels - list format [col, row, color]
         if 'custom' in data:
             for pixel in data['custom']:
                 character['pixels'].append({
-                    'row': pixel['row'],
-                    'col': pixel['col'],
+                    'row': pixel[1],      # Index 1: row
+                    'col': pixel[0],      # Index 0: col
                     'type': 'fixed',
-                    'color': pixel['color']
+                    'color': pixel[2]     # Index 2: color
                 })
         
-        # Add animations if they exist
+        # Process animations - handle list format
         if 'animations' in data:
-            character['animations'] = data['animations']
+            character['animations'] = []
+            for anim in data['animations']:
+                # Process list format
+                processed_anim = {
+                    'name': anim[0],                # Index 0: name
+                    'interval': anim[1],            # Index 1: interval
+                    'frame_duration': anim[2],      # Index 2: frame_duration
+                    'frames': [decode_pattern_to_pixels(frame) for frame in anim[3]],  # Index 3: frames
+                    'color': anim[4],               # Index 4: color
+                    'reverse': anim[5]              # Index 5: reverse
+                }
+                character['animations'].append(processed_anim)
                 
         return character
 
@@ -235,7 +252,7 @@ class Character:
                     'frame_duration': anim['frame_duration'],
                     'reverse': anim.get('reverse', False),
                     'color': anim.get('color', (255, 255, 255)),
-                    'frames': [CharacterDefinition.process_layer(frame) for frame in anim['frames']],
+                    'frames': anim['frames'],
                     'last_trigger': time.ticks_ms(),
                     'current_frame': 0,
                     'direction': 1
@@ -381,130 +398,35 @@ class Character:
 # --------------------------------------------------------------------------------
 # Character Definitions
 # --------------------------------------------------------------------------------
+# BEGIN COMPRESSED CHARACTER DATA
 CHARACTERS_RAW = [
     {
-        "id": "ghost_plain",
-        "name": "Plain Ghost",
-        "body": [
-            "_ _ X X X X _ _",
-            "_ X X X X X X _",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X _ X _ X _ X _"
-        ],
-        "animations": [
-            {
-                "name": "blink",
-                "interval": 3000,
-                "frame_duration": 50,
-                "reverse": False,
-                "color": (255, 255, 255),
-                "frames": [
-                    [   # Frame 1 - Eyes open
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ X _ _ X _ _",
-                        "_ _ X _ _ X _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _"
-                    ],
-                    [   # Frame 2 - Eyes half closed
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ X _ _ X _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _"
-                    ],
-                    [   # Frame 3 - Eyes closed
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _",
-                        "_ _ _ _ _ _ _ _"
-                    ]
-                ]
-            }
-        ]
+        'animations': [['blink', 3000, 50, ['0000000024240000', '0000000000240000', '0000000000000000'], (255, 255, 255), False]],
+        'body': '3C7EFFFFFFFFFFAA',
+        'id': 'ghost_plain',
+        'name': 'Plain Ghost'
     },
     {
-        "id": "ghost_fancy",
-        "name": "Fancy Ghost",
-        "body": [
-            "_ _ X X X X _ _",
-            "_ X X X X X X _",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X _ X _ X _ X _"
-        ],
-        # Eyes
-        "custom": [
-            {'row': 4, 'col': 2, 'color': (255, 0, 0)},    # Red
-            {'row': 4, 'col': 5, 'color': (255, 0, 0)},    # Red
-            {'row': 5, 'col': 2, 'color': (255, 127, 0)},  # Orange
-            {'row': 5, 'col': 5, 'color': (255, 127, 0)},  # Orange
-        ],
-        "hl": [
-            "_ _ _ _ _ X _ _",
-            "_ _ _ _ _ _ X _",
-            "_ _ _ _ _ _ _ X",
-            "_ _ _ _ _ _ _ _",
-            "_ _ _ _ _ _ _ _",
-            "_ _ _ _ _ _ _ _",
-            "_ _ _ _ _ _ _ _",
-            "_ _ _ _ _ _ _ _"
-        ],
-        "sdw": [
-            "_ _ _ _ _ _ _ _",
-            "_ _ _ _ _ _ _ _",
-            "X _ _ _ _ _ _ _",
-            "X _ _ _ _ _ _ _",
-            "X _ _ _ _ _ _ _",
-            "X _ _ _ _ _ _ _",
-            "X X _ _ _ _ _ _",
-            "X _ X _ _ _ _ _"
-        ]
+        'animations': [['blink_heart', 7000, 50, ['0000002424000000', '0000000024000000', '0000000000000000'], (255, 255, 255), False]],
+        'body': '0066FFFF7E3C1800',
+        'hl': '0006030100000000',
+        'id': 'heart',
+        'name': 'Heart'
     },
     {
-        "id": "ghost_colorful",
-        "name": "Colorful Ghost",
-        "body": [
-            "_ _ X X X X _ _",
-            "_ X X X X X X _",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X X X X X X X X",
-            "X _ X _ X _ X _"
-        ],
-        "custom": [
-            # Hat
-            {'row': 0, 'col': 2, 'color': (255, 0, 0)},    # Red
-            {'row': 0, 'col': 3, 'color': (255, 127, 0)},  # Orange
-            {'row': 0, 'col': 4, 'color': (255, 255, 0)},  # Yellow
-            {'row': 0, 'col': 5, 'color': (0, 255, 0)},    # Green
-            # Eyes
-            {'row': 4, 'col': 2, 'color': (255, 0, 0)},    # Red
-            {'row': 4, 'col': 5, 'color': (255, 0, 0)},    # Red
-            {'row': 5, 'col': 2, 'color': (255, 127, 0)},  # Orange
-            {'row': 5, 'col': 5, 'color': (255, 127, 0)},  # Orange
-        ]
+        'animations': [['blik_invader', 7000, 50, ['0000002400000000', '0000000000000000'], (255, 255, 255), False]],
+        'body': '423C7EFF7E422400',
+        'id': 'invader',
+        'name': 'Space Invader'
+    },
+    {
+        'animations': [['blik_invader', 7000, 50, ['006666187E7E4200', '000066187E7E4200', '000000187E7E4200'], (255, 255, 255), False]],
+        'body': 'FFFFFFFFFFFFFFFF',
+        'id': 'creeper',
+        'name': 'Creeper'
     }
 ]
+# END COMPRESSED CHARACTER DATA
 
 # Process the raw definitions into our final character data
 CHARACTERS_DATA = [CharacterDefinition.create_character(char) for char in CHARACTERS_RAW]
@@ -948,20 +870,6 @@ class UpdateState(BaseState):
                     
         except Exception as e:
             self._handle_error("Version check failed", e)
-            
-    # def _fetch_github_raw(self):
-    #     """Fetch version info from GitHub."""
-    #     try:
-    #         response = urequests.get(UPDATE_URL)
-    #         if response.status_code == 200:
-    #             content = response.text
-    #             response.close()
-    #             return content.strip()
-    #         response.close()
-    #         return None
-    #     except Exception as e:
-    #         print(f"GitHub fetch failed: {e}")
-    #         return None
         
     def _fetch_github_raw(self):
         try:
@@ -1004,12 +912,6 @@ class UpdateState(BaseState):
                 raise Exception("No update URL")
 
             print("Starting download...")
-
-            # Pre-allocate and immediately free memory to reduce fragmentation
-            # This creates a more contiguous memory space before the download
-            # large_buffer = bytearray(1024)  # Pre-allocate
-            # del large_buffer            # Free it immediately
-            # gc.collect()                # Compact memory
     
             # Get content length first
             response = urequests.get(url, stream=True)

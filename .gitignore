@@ -1,0 +1,8 @@
+.micropico/
+.micropico
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+wifi_config.py
+buildscripts/output.py
