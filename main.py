@@ -17,7 +17,7 @@ import gc
 LED_PIN = 0
 BUTTON_PIN = 10
 NUM_LEDS = 64
-BRIGHTNESS = 0.1
+BRIGHTNESS = 0.2
 
 # --------------------------------------------------------------------------------
 # Timing Configuration
@@ -36,7 +36,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.9"
+CURRENT_VERSION = "1.0.10"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
