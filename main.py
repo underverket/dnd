@@ -18,6 +18,9 @@ LED_PIN = 0
 BUTTON_PIN = 10
 NUM_LEDS = 64
 BRIGHTNESS = 0.2
+# Use 0 for mechanical button (pressed = low)
+# Use 1 for TTP223 touch sensor in AB=00 mode (touched = high)
+BUTTON_PRESSED_VALUE = 1
 
 # --------------------------------------------------------------------------------
 # Timing Configuration
@@ -36,7 +39,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.10"
+CURRENT_VERSION = "1.0.11"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -1292,13 +1295,13 @@ def main():
     }
 
     # Handle boot sequence
-    if button.value() == 0:  # Boot with button held
+    if button.value() == BUTTON_PRESSED_VALUE:  # Boot with button held
         controller.switch_to(CharactersState(controller))
         controller.update_display()
         print("Entering CHARACTERS mode (boot override)")
         
         boot_start = time.ticks_ms()
-        while button.value() == 0:
+        while button.value() == BUTTON_PRESSED_VALUE:
             if time.ticks_diff(time.ticks_ms(), boot_start) >= UPDATE_CHECK_TIME:
                 controller.switch_to(UpdateState(controller))
                 break
@@ -1353,12 +1356,12 @@ def main():
         # Handle button input
         if isinstance(controller.current_state, DefaultState) and controller.current_state.sub_state == DefaultSubState.INTRO:
             # Ignore button during intro, but reset state on release
-            if button.value() == 1:
+            if button.value() != BUTTON_PRESSED_VALUE:
                 button_state['pressed'] = False
                 button_state['long_press_handled'] = False
         else:
             # Normal button handling
-            if button.value() == 0:  # Pressed
+            if button.value() == BUTTON_PRESSED_VALUE:  # Pressed
                 if not button_state['pressed']:
                     button_state['pressed'] = True
                     button_state['press_start'] = current_time
