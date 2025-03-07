@@ -15,9 +15,9 @@ import gc
 # Hardware Configuration
 # --------------------------------------------------------------------------------
 LED_PIN = 0
-BUTTON_PIN = 10
+BUTTON_PIN = 11
 NUM_LEDS = 64
-BRIGHTNESS = 0.2
+BRIGHTNESS = 0.3
 # Use 0 for mechanical button (pressed = low)
 # Use 1 for TTP223 touch sensor in AB=00 mode (touched = high)
 BUTTON_PRESSED_VALUE = 1
@@ -39,7 +39,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.11"
+CURRENT_VERSION = "1.0.12"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -359,7 +359,7 @@ class Character:
         elif pixel['type'] == 'highlight':
             color = tuple(min(255, c + 40) for c in base_color)
         elif pixel['type'] == 'shadow':
-            color = tuple(max(0, c - 40) for c in base_color)
+            color = tuple(int(c * 0.4) for c in base_color)
         else:  # 'body'
             color = base_color
             
@@ -414,7 +414,8 @@ CHARACTERS_RAW = [
         'body': '0066FFFF7E3C1800',
         'hl': '0006030100000000',
         'id': 'heart',
-        'name': 'Heart'
+        'name': 'Heart',
+        'sdw': '0000008040201000'
     },
     {
         'animations': [['blik_invader', 7000, 50, ['0000002400000000', '0000000000000000'], (255, 255, 255), False]],
