@@ -44,7 +44,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.13"
+CURRENT_VERSION = "1.0.14"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -362,9 +362,9 @@ class Character:
         if pixel['type'] == 'fixed':
             color = pixel['color']
         elif pixel['type'] == 'highlight':
-            color = tuple(min(255, c + 40) for c in base_color)
+            color = tuple(min(255, c + 50) for c in base_color)
         elif pixel['type'] == 'shadow':
-            color = tuple(int(c * 0.4) for c in base_color)
+            color = tuple(int(c * 0.3) for c in base_color)
         else:  # 'body'
             color = base_color
             
@@ -433,6 +433,29 @@ CHARACTERS_RAW = [
         'body': 'FFFFFFFFFFFFFFFF',
         'id': 'creeper',
         'name': 'Creeper'
+    },
+    {
+        'animations': [['cat_walk', 1200, 300, ['000000000000AA00', '000000000000BB00', '000000000000AA00', '000000000000EE00'], (0, 0, 0), False]],
+        'body': '0255717F7F7F7F00',
+        'custom': [[0, 7, (195, 126, 74)], [1, 7, (195, 126, 74)], [2, 7, (195, 126, 74)], [3, 7, (195, 126, 74)], [4, 7, (195, 126, 74)], [5, 7, (195, 126, 74)], [6, 7, (195, 126, 74)], [7, 7, (195, 126, 74)]],
+        'hl': '0004000000200000',
+        'id': 'cat',
+        'name': 'The Cat',
+        'sdw': '0000000A0A000C00'
+    },
+    {
+        'animations': [['cat_blink', 7000, 50, ['0000000050000000', '0000000000000000'], (255, 255, 0), False]],
+        'body': 'FFFFFFFFFFFFFFFF',
+        'custom': [[1, 2, (20, 20, 20)], [4, 2, (20, 20, 20)], [1, 3, (20, 20, 20)], [2, 3, (20, 20, 20)], [3, 3, (20, 20, 20)], [4, 3, (20, 20, 20)], [1, 4, (20, 20, 20)], [2, 4, (20, 20, 20)], [3, 4, (20, 20, 20)], [4, 4, (20, 20, 20)], [1, 5, (20, 20, 20)], [2, 5, (20, 20, 20)], [3, 5, (20, 20, 20)], [4, 5, (20, 20, 20)], [6, 5, (50, 50, 50)], [7, 5, (20, 20, 20)], [2, 6, (20, 20, 20)], [3, 6, (20, 20, 20)], [4, 6, (20, 20, 20)], [5, 6, (20, 20, 20)], [7, 6, (20, 20, 20)], [2, 7, (50, 50, 50)], [3, 7, (20, 20, 20)], [4, 7, (50, 50, 50)], [5, 7, (20, 20, 20)], [6, 7, (20, 20, 20)], [7, 7, (20, 20, 20)]],
+        'id': 'cat2',
+        'name': 'The Sitting Cat'
+    },
+    {
+        'animations': [['squack', 11000, 500, ['60202020383E1800', '6020273E3C3E1800'], (255, 255, 255), False]],
+        'body': 'FFFFFFFFFFFFFFFF',
+        'custom': [[0, 1, (255, 127, 0)], [1, 1, (255, 127, 0)], [3, 7, (255, 127, 0)], [4, 7, (255, 127, 0)], [7, 5, (140, 140, 140)], [2, 6, (140, 140, 140)], [6, 6, (140, 140, 140)], [5, 6, (140, 140, 140)]],
+        'id': 'goose',
+        'name': 'The Goose'
     }
 ]
 # END COMPRESSED CHARACTER DATA
