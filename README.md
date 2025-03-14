@@ -89,7 +89,10 @@ When connected to WiFi, the device will:
 1. Edit `buildscripts/chars.py` to create or modify character designs using ASCII art
 2. Run the build script to generate the optimized character data:
    ```
-   python3 buildscripts/build.py
+   cd buildscripts
+   ```
+   ```
+   python3 build.py
    ```
 3. The script will update the character data in `main.py`
 

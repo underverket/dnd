@@ -25,21 +25,26 @@ BUTTON_PRESSED_VALUE = 1
 # --------------------------------------------------------------------------------
 # Timing Configuration
 # --------------------------------------------------------------------------------
-LONG_PRESS_TIME = 700       # 0.7 seconds for long press
-UPDATE_CHECK_TIME = 4000    # 4 seconds for update check
-INTRO_DURATION = 1000       # 1 second for intro animations
-POMODORO_SETUP_TIMEOUT = 5000  # 5 seconds before auto-starting
+# Button press timing
+LONG_PRESS_TIME = 700           # 0.7 seconds for mode switching
+CHARACTER_SELECT_TIME = 3000    # 3 seconds for character selection
+FORCE_UPDATE_TIME = 6000        # 6 seconds for force update
+BUTTON_DISCONNECT_THRESHOLD = 200  # Check at boot if button is disconnected
+
+# Animation and timeout durations
+INTRO_DURATION = 1000           # 1 second for intro animations
+POMODORO_SETUP_TIMEOUT = 5000   # 5 seconds before auto-starting pomodoro
 
 # Scheduled update check
 SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
-SCHEDULED_FRIYAY_CHECK = 10000  # 1 minute
+SCHEDULED_FRIYAY_CHECK = 10000  # 10 seconds
 
 # GitHub OTA Update Configuration
 FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.12"
+CURRENT_VERSION = "1.0.13"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -1268,6 +1273,7 @@ class StateController:
 # --------------------------------------------------------------------------------
 # Main Loop
 # --------------------------------------------------------------------------------
+
 def main():
     # Initialize hardware
     np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
@@ -1279,11 +1285,18 @@ def main():
     button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
     controller = StateController(np)
 
+    # Check if button is disconnected at boot time
+    button_disconnected = check_button_disconnected(button, BUTTON_DISCONNECT_THRESHOLD)
+    if button_disconnected:
+        print("WARNING: Button appears to be disconnected at boot")
+    
     # Initialize state variables
     button_state = {
         'pressed': False,
         'press_start': 0,
-        'long_press_handled': False
+        'last_action_time': 0,
+        'disconnected': button_disconnected,
+        'last_state': button.value()
     }
     
     background_state = {
@@ -1295,20 +1308,9 @@ def main():
         'last_friyay_check': time.ticks_ms()
     }
 
-    # Handle boot sequence
-    if button.value() == BUTTON_PRESSED_VALUE:  # Boot with button held
-        controller.switch_to(CharactersState(controller))
-        controller.update_display()
-        print("Entering CHARACTERS mode (boot override)")
-        
-        boot_start = time.ticks_ms()
-        while button.value() == BUTTON_PRESSED_VALUE:
-            if time.ticks_diff(time.ticks_ms(), boot_start) >= UPDATE_CHECK_TIME:
-                controller.switch_to(UpdateState(controller))
-                break
-    else:  # Normal boot
-        controller.switch_to(DefaultState(controller))
-        print("Starting in DEFAULT mode")
+    # Normal boot - always start in default mode
+    controller.switch_to(DefaultState(controller))
+    print("Starting in DEFAULT mode")
 
     # Main loop
     while True:
@@ -1355,33 +1357,85 @@ def main():
             background_state['last_friyay_check'] = current_time
 
         # Handle button input
-        if isinstance(controller.current_state, DefaultState) and controller.current_state.sub_state == DefaultSubState.INTRO:
-            # Ignore button during intro, but reset state on release
-            if button.value() != BUTTON_PRESSED_VALUE:
-                button_state['pressed'] = False
-                button_state['long_press_handled'] = False
-        else:
-            # Normal button handling
-            if button.value() == BUTTON_PRESSED_VALUE:  # Pressed
+        current_button_value = button.value()
+
+        # Check for button reconnection or disconnection
+        if button_state['last_state'] != current_button_value:
+            # State changed - button is definitely connected
+            if button_state['disconnected']:
+                print("Button reconnected - resuming normal operation")
+                button_state['disconnected'] = False
+            
+            button_state['last_state'] = current_button_value
+        elif current_button_value == BUTTON_PRESSED_VALUE and not button_state['pressed'] and not button_state['disconnected']:
+            # Button just went high and not previously flagged as disconnected
+            # Verify it's a real press by waiting briefly to see if it changes
+            if check_button_disconnected(button, BUTTON_DISCONNECT_THRESHOLD):
+                print("Button appears to be disconnected")
+                button_state['disconnected'] = True
+
+        # Skip button processing if disconnected
+        if button_state['disconnected']:
+            pass  # Do nothing with button input
+        elif not (isinstance(controller.current_state, DefaultState) and 
+                controller.current_state.sub_state == DefaultSubState.INTRO):
+            # Normal button processing code here...
+            if current_button_value == BUTTON_PRESSED_VALUE:  # Pressed
                 if not button_state['pressed']:
                     button_state['pressed'] = True
                     button_state['press_start'] = current_time
+                    button_state['last_action_time'] = 0
                 else:
                     press_duration = time.ticks_diff(current_time, button_state['press_start'])
-                    if press_duration >= LONG_PRESS_TIME and not button_state['long_press_handled']:
-                        controller.handle_long_press()
-                        button_state['long_press_handled'] = True
+                    
+                    # First threshold: Normal long press (mode switch) at 0.7 seconds
+                    if press_duration >= LONG_PRESS_TIME and press_duration < CHARACTER_SELECT_TIME:
+                        if button_state['last_action_time'] < LONG_PRESS_TIME:
+                            controller.handle_long_press()  # Original long press handler
+                            button_state['last_action_time'] = LONG_PRESS_TIME
+                    
+                    # Second threshold: Character select at 3 seconds
+                    elif press_duration >= CHARACTER_SELECT_TIME and press_duration < FORCE_UPDATE_TIME:
+                        if button_state['last_action_time'] < CHARACTER_SELECT_TIME:
+                            controller.switch_to(CharactersState(controller))
+                            button_state['last_action_time'] = CHARACTER_SELECT_TIME
+                    
+                    # Third threshold: Force update at 6 seconds
+                    elif press_duration >= FORCE_UPDATE_TIME:
+                        if button_state['last_action_time'] < FORCE_UPDATE_TIME:
+                            controller.switch_to(UpdateState(controller))
+                            button_state['last_action_time'] = FORCE_UPDATE_TIME
             else:  # Released
                 if button_state['pressed']:
                     press_duration = time.ticks_diff(current_time, button_state['press_start'])
-                    if press_duration < LONG_PRESS_TIME:
+                    if press_duration < LONG_PRESS_TIME and button_state['last_action_time'] == 0:
                         controller.handle_short_press()
                     button_state['pressed'] = False
-                    button_state['long_press_handled'] = False
+                    button_state['last_action_time'] = 0
 
         # Update display
         controller.update_display()
         time.sleep(0.01)
+
+# Function to check if button is disconnected
+def check_button_disconnected(button_pin, verify_time_ms):
+    """
+    Check if button appears to be disconnected (constantly high)
+    Returns True if disconnected, False if connected
+    """
+    # If button isn't high, it's definitely connected
+    if button_pin.value() != BUTTON_PRESSED_VALUE:
+        return False
+    
+    # Button is high - wait to see if it changes
+    start_time = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), start_time) < verify_time_ms:
+        if button_pin.value() != BUTTON_PRESSED_VALUE:
+            return False  # Button changed state, it's connected
+        time.sleep(0.01)
+    
+    # If we get here, button was constantly high - likely disconnected
+    return True
 
 if __name__ == '__main__':
     try:
