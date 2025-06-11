@@ -47,7 +47,7 @@ WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
 CURRENT_VERSION = "1.0.15"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
-UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
+UPDATE_URL = "http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
 
 # --------------------------------------------------------------------------------
 # WiFi Management
