@@ -16,8 +16,9 @@ import gc
 # --------------------------------------------------------------------------------
 LED_PIN = 0
 BUTTON_PIN = 11
-NUM_LEDS = 64
+NUM_LEDS = 65
 BRIGHTNESS = 0.3
+BACK_LED_INDEX = 64
 # Use 0 for mechanical button (pressed = low)
 # Use 1 for TTP223 touch sensor in AB=00 mode (touched = high)
 BUTTON_PRESSED_VALUE = 1
@@ -44,7 +45,7 @@ FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.15"
+CURRENT_VERSION = "1.0.14"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -117,6 +118,15 @@ class BaseState:
     def update(self, current_time):
         """Periodic update (e.g., for time-based transitions)."""
         pass
+
+    def _set_back_led(self, color):
+        """Set the back LED with a higher brightness than the main display"""
+        # Define a higher brightness factor for the back LED
+        BACK_LED_BRIGHTNESS = 1  # 80% brightness instead of 30%
+        
+        # Apply the higher brightness to the color
+        bright_color = tuple(int(c * BACK_LED_BRIGHTNESS) for c in color)
+        self.controller.np[BACK_LED_INDEX] = bright_color
     
     def handle_short_press(self):
         """Handle short button press."""
@@ -303,7 +313,7 @@ class Character:
                 
         return animation_pixels
 
-    def render(self, mode, np, brightness=0.1, row_offset=0, selection_color=None):
+    def render(self, mode, np, brightness=0.1, row_offset=0, selection_color=None, write_out=True):
         """Updated render to handle animations"""
         np.fill((0, 0, 0))
         
@@ -323,8 +333,10 @@ class Character:
             if 0 <= new_row < 8:
                 color = tuple(int(c * brightness) for c in pixel['color'])
                 np[self._get_pixel_index(new_row, pixel['col'])] = color
-                
-        np.write()
+        
+        # Only write if requested
+        if write_out:
+            np.write()
                 
     def _render_solid(self, np, mode, brightness, row_offset=0, override_color=None):
         base_colors = {
@@ -456,15 +468,6 @@ CHARACTERS_RAW = [
         'custom': [[0, 1, (255, 127, 0)], [1, 1, (255, 127, 0)], [3, 7, (255, 127, 0)], [4, 7, (255, 127, 0)], [7, 5, (140, 140, 140)], [2, 6, (140, 140, 140)], [6, 6, (140, 140, 140)], [5, 6, (140, 140, 140)]],
         'id': 'goose',
         'name': 'The Goose'
-    },
-    {
-        'animations': [['wag', 4000, 100, ['0000402020000000', '00000020A0000000', '00000080A0000000', '0000408080000000', '00000080A0000000', '00000020A0000000', '0000402020000000'], (0, 0, 0), True]],
-        'body': '61315FFFFF5E7E3E',
-        'custom': [[4, 3, (255, 255, 255)], [7, 3, (255, 255, 255)]],
-        'hl': '0000084046404000',
-        'id': 'pika',
-        'name': 'Toothless',
-        'sdw': '412046A0B100000C'
     }
 ]
 # END COMPRESSED CHARACTER DATA
@@ -554,23 +557,43 @@ class DefaultState(BaseState):
             # Calculate row offset (8 to 0)
             row_offset = (1 - eased_progress) * 8
             
-            # Render with calculated offset
+            # Render with calculated offset but don't write yet
             self.character.render(
                 mode=DefaultSubState.AVAILABLE,
                 np=self.controller.np,
                 brightness=BRIGHTNESS,
-                row_offset=int(row_offset)
+                row_offset=int(row_offset),
+                write_out=False  # Don't write yet
             )
+            # Now set back LED and write once
+            self._set_back_led((0, 255, 0))  # Green for available during intro
+            self.controller.np.write()
+            
         elif self.sub_state == DefaultSubState.FRIYAY:
             # Render the scrolling "FRIYAY!" text
             self._render_scrolling_text(self.FRIYAY_TEXT, color=(255, 255, 0))  # Yellow text
         else:
-            # Normal rendering
+            # Normal rendering - don't write yet
             self.character.render(
                 mode=self.sub_state,
                 np=self.controller.np,
-                brightness=BRIGHTNESS
+                brightness=BRIGHTNESS,
+                write_out=False  # Important: don't write yet
             )
+
+            # Back LED control based on sub-state
+            if self.sub_state == DefaultSubState.BUSY:
+                self._set_back_led((255, 0, 0))  # Red
+            elif self.sub_state == DefaultSubState.AVAILABLE:
+                self._set_back_led((0, 255, 0))  # Green
+            elif self.sub_state == DefaultSubState.SOCIAL:
+                hue = (time.ticks_ms() // 10) % 255
+                self._set_back_led(self.character._wheel(hue))
+            else:
+                self._set_back_led((0, 0, 0))  # Off for other modes
+                
+            # Now write once, updating all LEDs
+            self.controller.np.write()
     
     # Add these new properties
     FRIYAY_TEXT = "FRIYAY!"
@@ -680,13 +703,20 @@ class CharactersState(BaseState):
         self.controller.switch_to(DefaultState(self.controller))
     
     def update_display(self):
-        # Render the character with the selection color
+        # Render the character with the selection color but don't write yet
         self.preview_character.render(
             mode="available",  # Use available mode as base
-            np=self.controller.np,
+            np=self.controller.np, 
             brightness=BRIGHTNESS,
-            selection_color=self.SELECTION_COLOR
+            selection_color=self.SELECTION_COLOR,
+            write_out=False  # Important: don't write yet
         )
+        
+        # Set back LED to pink to match selection mode
+        self._set_back_led(self.SELECTION_COLOR)  # Use the same pink color
+        
+        # Now write once - this updates all LEDs together
+        self.controller.np.write()
 
 # --------------------------------------------------------------------------------
 # PomodoroState
