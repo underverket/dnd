@@ -130,6 +130,7 @@ def main():
     try:
         sys.path.append(os.path.dirname(os.path.abspath(__file__)))
         from chars import CHARACTERS_RAW
+        from icons import ICONS_RAW
     except ImportError:
         print("Error: Could not import CHARACTERS_RAW from chars.py")
         return
@@ -175,6 +176,51 @@ def main():
                 compressed_char["animations"].append(compressed_anim)
 
         compressed_chars.append(compressed_char)
+
+    # Create compressed icons
+    compressed_icons = []
+    for icon in ICONS_RAW:
+        compressed_icon = {
+            "id": icon["id"],
+            "name": icon["name"],
+            "body": pattern_to_hex(icon["body"])
+        }
+        
+        # Handle body_color if present - ONLY FOR ICONS
+        if "body_color" in icon:
+            compressed_icon["body_color"] = icon["body_color"]
+        
+        # Handle highlight if present
+        if "hl" in icon:
+            compressed_icon["hl"] = pattern_to_hex(icon["hl"])
+            
+        # Handle shadow if present
+        if "sdw" in icon:
+            compressed_icon["sdw"] = pattern_to_hex(icon["sdw"])
+            
+        # Handle custom pixels
+        if "custom" in icon:
+            compressed_icon["custom"] = []
+            for pixel in icon["custom"]:
+                compressed_icon["custom"].append(
+                    [pixel['col'], pixel['row'], pixel['color']]
+                )
+                
+        # Handle animations
+        if "animations" in icon:
+            compressed_icon["animations"] = []
+            for anim in icon["animations"]:
+                compressed_anim = [
+                    anim["name"],
+                    anim["interval"],
+                    anim["frame_duration"],
+                    compress_frames(anim["frames"]),
+                    anim.get("color", (255, 255, 255)),
+                    anim.get("reverse", False)
+                ]
+                compressed_icon["animations"].append(compressed_anim)
+
+        compressed_icons.append(compressed_icon)
     
     # Format with our custom formatter
     output_content = "# Auto-generated from build_chars.py\n\n"
@@ -190,38 +236,37 @@ def main():
 
     # Now inject the compressed character data into main.py
     try:
-        # Read main.py
-        with open("../main.py", "r") as f:  # Adjust path if needed
+        with open("../main.py", "r") as f:
             main_content = f.read()
         
-        # Look for marker comments
+        # Handle characters
         start_marker = "# BEGIN COMPRESSED CHARACTER DATA"
         end_marker = "# END COMPRESSED CHARACTER DATA"
         
-        # Find the section to replace
         start_index = main_content.find(start_marker)
         end_index = main_content.find(end_marker)
         
-        if start_index == -1 or end_index == -1:
-            print("Warning: Couldn't find marker comments in main.py")
-            print("Make sure to add the following comments in main.py:")
-            print(f"  {start_marker}")
-            print(f"  {end_marker}")
-        else:
-            # Extract the part we want to replace (including the markers)
+        if start_index != -1 and end_index != -1:
             end_index += len(end_marker)
-            
-            # Create new content with our compressed data
             new_section = f"{start_marker}\nCHARACTERS_RAW = {custom_format(compressed_chars)}\n{end_marker}"
+            main_content = main_content[:start_index] + new_section + main_content[end_index:]
+        
+        # Handle icons (new section)
+        icon_start_marker = "# BEGIN COMPRESSED ICON DATA"
+        icon_end_marker = "# END COMPRESSED ICON DATA"
+        
+        icon_start_index = main_content.find(icon_start_marker)
+        icon_end_index = main_content.find(icon_end_marker)
+        
+        if icon_start_index != -1 and icon_end_index != -1:
+            icon_end_index += len(icon_end_marker)
+            new_icon_section = f"{icon_start_marker}\nICONS_RAW = {custom_format(compressed_icons)}\n{icon_end_marker}"
+            main_content = main_content[:icon_start_index] + new_icon_section + main_content[icon_end_index:]
             
-            # Replace the section
-            updated_main = main_content[:start_index] + new_section + main_content[end_index:]
+        with open("../main.py", "w") as f:
+            f.write(main_content)
             
-            # Write updated main.py
-            with open("../main.py", "w") as f:  # Adjust path if needed
-                f.write(updated_main)
-                
-            print("Successfully injected compressed data into main.py")
+        print("Successfully injected compressed data into main.py")
     except Exception as e:
         print(f"Error updating main.py: {e}")
     

@@ -31,23 +31,31 @@ CHARACTER_SELECT_TIME = 3000    # 3 seconds for character selection
 FORCE_UPDATE_TIME = 6000        # 6 seconds for force update
 BUTTON_DISCONNECT_THRESHOLD = 200  # Check at boot if button is disconnected
 
+# Features
+POMODORO_ENABLED = False # Enable or disable Pomodoro functionality
+
+# Coffee combo detection
+COFFEE_COMBO_TAPS = 3           # Number of rapid taps needed
+RAPID_TAP_THRESHOLD = 200       # Max 300ms between taps
+COMBO_TIMEOUT = 1000           # 2 seconds to complete combo
+
 # Animation and timeout durations
 INTRO_DURATION = 1000           # 1 second for intro animations
 POMODORO_SETUP_TIMEOUT = 5000   # 5 seconds before auto-starting pomodoro
 
 # Scheduled update check
 SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
-SCHEDULED_FRIYAY_CHECK = 10000  # 10 seconds
+SCHEDULED_FRIYAY_CHECK = 60000  # 10 seconds
 
 # GitHub OTA Update Configuration
 FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.15"
+CURRENT_VERSION = "1.0.16"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
-UPDATE_URL = "http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
+UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
 
 # --------------------------------------------------------------------------------
 # WiFi Management
@@ -184,7 +192,11 @@ class CharacterDefinition:
             'name': data['name'],
             'pixels': []
         }
-        
+
+        # Add body_color if present
+        if 'body_color' in data:
+            character['body_color'] = data['body_color']
+            
         # Process body pattern
         if 'body' in data:
             body_pixels = decode_pattern_to_pixels(data['body'])
@@ -252,6 +264,10 @@ class Character:
         # Animation handling
         self.animations = {}
 
+        # Store custom body color if present
+        if 'body_color' in data:
+            self.body_color = data['body_color']
+
         # Process animations if they exist in the data
         if 'animations' in data:
             for anim in data['animations']:
@@ -304,12 +320,19 @@ class Character:
         return animation_pixels
 
     def render(self, mode, np, brightness=0.1, row_offset=0, selection_color=None):
-        """Updated render to handle animations"""
+        """Updated render to handle animations and custom body color"""
         np.fill((0, 0, 0))
+
+        # Determine what color to use for rendering
+        render_color = selection_color
+        if not render_color:
+            # Check if this character/icon has a custom body color
+            if hasattr(self, 'body_color'):
+                render_color = self.body_color
         
         # Render base character first
-        if selection_color:
-            self._render_solid(np, mode, brightness, row_offset, selection_color)
+        if render_color:  # ← FIXED: Use render_color instead of selection_color
+            self._render_solid(np, mode, brightness, row_offset, render_color)
         else:
             if mode == 'social':
                 self._render_rainbow(np, brightness, row_offset)
@@ -402,6 +425,25 @@ class Character:
     @staticmethod
     def _get_pixel_index(row, col):
         return row * 8 + col
+    
+# --------------------------------------------------------------------------------
+# Icon Definitions
+# --------------------------------------------------------------------------------
+# BEGIN COMPRESSED ICON DATA
+ICONS_RAW = [
+    {
+        'animations': [['steam', 1200, 200, ['2814280000000000', '1414280000000000', '1428280000000000', '2850280000000000', '5050280000000000', '5028280000000000'], (101, 67, 33), True]],
+        'body': 'FFFFFFFFFFFFFFFF',
+        'body_color': (40, 26, 13),
+        'custom': [[1, 3, (255, 255, 255)], [2, 3, (255, 255, 255)], [3, 3, (255, 255, 255)], [4, 3, (255, 255, 255)], [5, 3, (255, 255, 255)], [1, 4, (255, 255, 255)], [1, 5, (255, 255, 255)], [1, 6, (255, 255, 255)], [5, 4, (255, 255, 255)], [5, 5, (255, 255, 255)], [5, 6, (255, 255, 255)], [2, 7, (255, 255, 255)], [3, 7, (255, 255, 255)], [4, 7, (255, 255, 255)], [6, 4, (255, 255, 255)], [6, 5, (255, 255, 255)], [2, 4, (101, 67, 33)], [3, 4, (101, 67, 33)], [4, 4, (101, 67, 33)], [2, 5, (101, 67, 33)], [3, 5, (101, 67, 33)], [4, 5, (101, 67, 33)], [2, 6, (101, 67, 33)], [3, 6, (101, 67, 33)], [4, 6, (101, 67, 33)]],
+        'id': 'coffee',
+        'name': 'Coffee Break'
+    }
+]
+# END COMPRESSED ICON DATA
+
+# Process the raw icon definitions
+ICONS_DATA = [CharacterDefinition.create_character(icon) for icon in ICONS_RAW]
     
 # --------------------------------------------------------------------------------
 # Character Definitions
@@ -500,6 +542,10 @@ class DefaultState(BaseState):
         self.character = Character(CHARACTERS_DATA[controller.selected_character])
         self.animation_start = None
 
+        # Coffee combo detection
+        self.tap_combo = []
+        self.last_tap_time = 0
+
         # Initialize FRIYAY-related attributes
         self.friyay_scroll_position = 0
         self.last_scroll_time = 0
@@ -523,23 +569,70 @@ class DefaultState(BaseState):
                 print(f"Auto: Default {DefaultSubState.INTRO} → {DefaultSubState.AVAILABLE}")
                 self.sub_state = DefaultSubState.AVAILABLE
     
+    # def handle_short_press(self):
+    #     if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
+    #         # Find current state in cycle and move to next
+    #         try:
+    #             current_idx = DefaultSubState.CYCLE_STATES.index(self.sub_state)
+    #         except ValueError:
+    #             # If current state not in cycle (shouldn't happen), go to first state
+    #             current_idx = -1
+                
+    #         next_idx = (current_idx + 1) % len(DefaultSubState.CYCLE_STATES)
+    #         self.sub_state = DefaultSubState.CYCLE_STATES[next_idx]
+    #         print(f"Short press: Default → {self.sub_state}")
+
     def handle_short_press(self):
         if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
-            # Find current state in cycle and move to next
+            current_time = time.ticks_ms()
+            
+            # Check if this tap is part of a rapid sequence
+            if (len(self.tap_combo) == 0 or 
+                time.ticks_diff(current_time, self.last_tap_time) <= RAPID_TAP_THRESHOLD):
+                
+                self.tap_combo.append(current_time)
+                self.last_tap_time = current_time
+                
+                # Check for rapid taps
+                if len(self.tap_combo) >= COFFEE_COMBO_TAPS:
+                    print(f"🎉 {COFFEE_COMBO_TAPS} rapid taps detected - Coffee time!")
+                    self.controller.switch_to(CoffeeState(self.controller))
+                    self.tap_combo = []  # Reset combo
+                    return
+                    
+            else:
+                # Too slow, reset combo
+                self.tap_combo = [current_time]
+                self.last_tap_time = current_time
+            
+            # Clean up old taps from combo
+            self.tap_combo = [tap for tap in self.tap_combo 
+                            if time.ticks_diff(current_time, tap) <= COMBO_TIMEOUT]
+            
+            # Normal mode switching behavior
             try:
                 current_idx = DefaultSubState.CYCLE_STATES.index(self.sub_state)
             except ValueError:
-                # If current state not in cycle (shouldn't happen), go to first state
                 current_idx = -1
                 
             next_idx = (current_idx + 1) % len(DefaultSubState.CYCLE_STATES)
             self.sub_state = DefaultSubState.CYCLE_STATES[next_idx]
             print(f"Short press: Default → {self.sub_state}")
     
+    # def handle_long_press(self):
+    #     if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
+    #         print("Long press: Default → Pomodoro INTRO")
+    #         self.controller.switch_to(PomodoroState(self.controller))
+
     def handle_long_press(self):
         if self.sub_state != DefaultSubState.INTRO:  # Don't interrupt intro
-            print("Long press: Default → Pomodoro INTRO")
-            self.controller.switch_to(PomodoroState(self.controller))
+            if POMODORO_ENABLED:
+                print("Long press: Default → Pomodoro INTRO")
+                self.controller.switch_to(PomodoroState(self.controller))
+            else:
+                print("Long press: Pomodoro disabled")
+                # Optional: could do something else here, like flash a color briefly
+                pass
     
     def update_display(self):
         if self.sub_state == DefaultSubState.INTRO:
@@ -1158,9 +1251,13 @@ class TimeManager:
         dt = self.rtc.datetime()
         _, _, _, weekday, hour, minute, _, _ = dt
 
+        # Debug: Print current time info
+        weekday_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        print(f"Current time: {weekday_names[weekday]} {hour:02d}:{minute:02d} (weekday={weekday})")
+
         # Debug override: Uncomment to force test time interval between 17:00 and 17:10
-        # return hour == 19 and minute < 6
-         
+        # return hour == 15 and minute < 10
+        
         # If after Friday (4) 15:00 and before Saturday (5) 02:00 AM
         return (weekday == 4 and hour >= 15) or (weekday == 5 and hour < 2)
     
@@ -1300,6 +1397,44 @@ class StateController:
                 if default_state.sub_state == DefaultSubState.FRIYAY:
                     default_state.sub_state = DefaultSubState.AVAILABLE
                     print("Switching from FRIYAY to AVAILABLE (no longer Friyay time)")
+
+
+class CoffeeState(BaseState):
+    """Coffee break mode - shows coffee mug until tapped again."""
+    
+    def __init__(self, controller):
+        super().__init__(controller)
+        self.coffee_icon = None
+        
+    def on_enter(self):
+        print("☕ Coffee break mode activated!")
+        # Find the coffee icon
+        for icon_data in ICONS_DATA:
+            if icon_data['id'] == 'coffee':
+                self.coffee_icon = Character(icon_data)  # Reuse Character class
+                break
+        
+        if not self.coffee_icon:
+            # Fallback to red screen if icon not found
+            pass
+    
+    def handle_short_press(self):
+        print("☕ Coffee break over - returning to normal mode")
+        self.controller.switch_to(DefaultState(self.controller))
+    
+    def handle_long_press(self):
+        self.handle_short_press()
+    
+    def update_display(self):
+        if self.coffee_icon:
+            # Just render normally - it will automatically use the brown body_color
+            self.coffee_icon.render(
+                mode='available',  # This gets ignored because of body_color
+                np=self.controller.np,
+                brightness=BRIGHTNESS
+            )
+        else:
+            self._fill_solid_color((255, 0, 0))
 
 
 # --------------------------------------------------------------------------------
