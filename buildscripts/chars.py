@@ -762,7 +762,7 @@ CHARACTERS_RAW = [
             {"row": 6, "col": 7, "color": (223, 38, 44)},   # Red
 
             # Mouth
-            {"row": 7, "col": 4, "color": (50, 35, 20)},
+            {"row": 7, "col": 4, "color": (50, 35, 20)}
         ],
         "animations": [
             {
