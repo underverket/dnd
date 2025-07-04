@@ -699,5 +699,101 @@ CHARACTERS_RAW = [
             {"row": 3, "col": 4, "color": (255, 255, 255)},
             {"row": 3, "col": 7, "color": (255, 255, 255)}
         ]
+    },
+    {
+        "id": "smoking_doggo",
+        "name": "Smoking Doggo",
+        "body": [
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X",
+            "X X X X X X X X"
+        ],
+        "custom": [
+            # Eyes
+            {"row": 3, "col": 2, "color": (0, 0, 0)},
+            {"row": 3, "col": 3, "color": (246, 246, 246)},
+            {"row": 3, "col": 4, "color": (0, 0, 0)},
+            {"row": 3, "col": 5, "color": (246, 246, 246)},
+            {"row": 4, "col": 6, "color": (0, 0, 0)},
+
+            # Ears
+            {"row": 1, "col": 0, "color": (118, 82, 50)},
+            {"row": 1, "col": 1, "color": (190, 135, 85)},
+            {"row": 1, "col": 4, "color": (190, 135, 85)},
+            {"row": 1, "col": 5, "color": (190, 135, 85)},
+
+            # Head & Snout
+            {"row": 2, "col": 1, "color": (118, 82, 50)},
+            {"row": 2, "col": 2, "color": (190, 135, 85)},
+            {"row": 2, "col": 3, "color": (190, 135, 85)},
+            {"row": 2, "col": 4, "color": (118, 82, 50)},
+            {"row": 3, "col": 1, "color": (118, 82, 50)},
+            {"row": 4, "col": 1, "color": (118, 82, 50)},
+            {"row": 4, "col": 2, "color": (118, 82, 50)},
+            {"row": 4, "col": 3, "color": (118, 82, 50)},
+            {"row": 4, "col": 4, "color": (118, 82, 50)},
+            {"row": 4, "col": 5, "color": (118, 82, 50)},
+            {"row": 5, "col": 0, "color": (190, 135, 85)},
+            {"row": 5, "col": 1, "color": (118, 82, 50)},
+            {"row": 5, "col": 2, "color": (118, 82, 50)},
+            {"row": 5, "col": 3, "color": (118, 82, 50)},
+            {"row": 5, "col": 4, "color": (118, 82, 50)},
+            {"row": 5, "col": 5, "color": (118, 82, 50)},
+
+            # Neck and lower part
+            {"row": 6, "col": 0, "color": (118, 82, 50)},
+            {"row": 6, "col": 1, "color": (118, 82, 50)},
+            {"row": 6, "col": 2, "color": (118, 82, 50)},
+            {"row": 6, "col": 3, "color": (118, 82, 50)},
+            {"row": 7, "col": 0, "color": (118, 82, 50)},
+            {"row": 7, "col": 1, "color": (118, 82, 50)},
+            {"row": 7, "col": 2, "color": (118, 82, 50)},
+            {"row": 7, "col": 3, "color": (118, 82, 50)},
+
+            # Cigarette
+            {"row": 6, "col": 4, "color": (237, 121, 36)},  # Orange
+            {"row": 6, "col": 5, "color": (246, 246, 246)}, # White
+            {"row": 6, "col": 6, "color": (246, 246, 246)}, # White
+            {"row": 6, "col": 7, "color": (223, 38, 44)},   # Red
+
+            # Mouth
+            {"row": 7, "col": 4, "color": (50, 35, 20)},
+        ],
+        "animations": [
+            {
+                "name": "blink_doggo",
+                "interval": 6000,
+                "frame_duration": 60,
+                "reverse": False,
+                "color": (118, 82, 50),
+                "frames": [
+                    [
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _"
+                    ],
+                    [
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ X X X X _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _",
+                        "_ _ _ _ _ _ _ _"
+                    ]
+                ]
+            }
+        ]
     }
 ]
