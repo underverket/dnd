@@ -50,9 +50,8 @@ SCHEDULED_FRIYAY_CHECK = 60000  # 10 seconds
 # GitHub OTA Update Configuration
 FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
-WIFI_CONNECT_ATTEMPTS = 2   # Initial attempt + 2 retries
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.16"
+CURRENT_VERSION = "1.0.17"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -60,6 +59,32 @@ UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main
 # --------------------------------------------------------------------------------
 # WiFi Management
 # --------------------------------------------------------------------------------
+def safe_reset():
+    """
+    Reset the device, but first shut down WiFi to avoid CYW43 getting stuck
+    across soft resets.
+    """
+    try:
+        wlan = network.WLAN(network.STA_IF)
+
+        # Always try disconnect first (even if not active)
+        try:
+            wlan.disconnect()
+        except:
+            pass
+
+        # Then force radio off
+        try:
+            wlan.active(False)
+        except:
+            pass
+
+        time.sleep(1)
+    except:
+        pass
+
+    machine.reset()
+
 class WiFiManager:
     """Centralized WiFi connection management."""
     
@@ -70,16 +95,31 @@ class WiFiManager:
             from wifi_config import WIFI_SSID, WIFI_PASSWORD
             if not WIFI_SSID or not WIFI_PASSWORD:
                 raise Exception("No WiFi credentials")
-                
+
             wlan = network.WLAN(network.STA_IF)
+
+            # If already connected, do nothing
             if wlan.isconnected():
                 return True, "Already connected"
-                
-            print(f"Connecting to WiFi: {WIFI_SSID}")
+
+            # Force a clean interface start (helps after soft resets / wedged driver)
+            try:
+                wlan.disconnect()
+            except:
+                pass
+            try:
+                wlan.active(False)
+                time.sleep(0.2)
+            except:
+                pass
+
             wlan.active(True)
+            time.sleep(0.2)
+
+            print(f"Connecting to WiFi: {WIFI_SSID}")
             wlan.connect(WIFI_SSID, WIFI_PASSWORD)
             return True, WIFI_SSID
-            
+
         except ImportError:
             return False, "No WiFi credentials file"
         except Exception as e:
@@ -111,7 +151,7 @@ class BaseState:
     """Abstract base class for states."""
     def __init__(self, controller):
         self.controller = controller
-        self.sub_state = None  # Used for cnsistent sub-state handling.
+        self.sub_state = None  # Used for consistent sub-state handling.
         self.entry_time = None  # Used for timing management.
 
     def on_enter(self, **kwargs):
@@ -1007,7 +1047,7 @@ class UpdateState(BaseState):
                     self.sub_state = UpdateSubState.DOWNLOADING
                 else:
                     print("No update needed")
-                    machine.reset()
+                    safe_reset()
                     
         except Exception as e:
             self._handle_error("Version check failed", e)
@@ -1128,7 +1168,7 @@ class UpdateState(BaseState):
             # Wait for 2 seconds while showing spinner
             if time.ticks_diff(time.ticks_ms(), self._install_start_time) >= 2000:
                 print("Installation complete, rebooting...")
-                machine.reset()
+                safe_reset()
                 
         except Exception as e:
             self._handle_error("Installation failed", e)
@@ -1148,7 +1188,7 @@ class UpdateState(BaseState):
         
         # Brief pause before reboot
         time.sleep(0.5)
-        machine.reset()
+        safe_reset()
 
 # --------------------------------------------------------------------------------
 # Time Management
