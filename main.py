@@ -22,6 +22,9 @@ BRIGHTNESS = 0.3
 # Use 1 for TTP223 touch sensor in AB=00 mode (touched = high)
 BUTTON_PRESSED_VALUE = 1
 
+# Temporary update/reboot test
+TEST_UPDATE_ON_SHORT_PRESS = True
+
 # --------------------------------------------------------------------------------
 # Timing Configuration
 # --------------------------------------------------------------------------------
@@ -51,7 +54,7 @@ SCHEDULED_FRIYAY_CHECK = 60000  # 10 seconds
 FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.17"
+CURRENT_VERSION = "1.0.18"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -1289,24 +1292,44 @@ class TimeManager:
         return h == 3 and m < 45
     
     def is_friyay_time(self):
-        """Check if it's FRIYAY time (Friday 15:00 to Saturday 02:00)."""
+        """
+        Temporary test:
+        Friyay is active on Sunday after 08:00.
+        """
 
-        # Check if time is set, otherwise weekdays can be wrong.
         if not self.is_time_set():
+            print(
+                "FRIYAY TEST: Time is not set",
+                "RTC:",
+                self.rtc.datetime(),
+                "is_synced:",
+                self.is_synced
+            )
             return False
-            
+
         dt = self.rtc.datetime()
         _, _, _, weekday, hour, minute, _, _ = dt
 
-        # Debug: Print current time info
-        weekday_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        print(f"Current time: {weekday_names[weekday]} {hour:02d}:{minute:02d} (weekday={weekday})")
+        weekday_names = [
+            'Mon',
+            'Tue',
+            'Wed',
+            'Thu',
+            'Fri',
+            'Sat',
+            'Sun'
+        ]
 
-        # Debug override: Uncomment to force test time interval between 17:00 and 17:10
-        # return hour == 15 and minute < 10
-        
-        # If after Friday (4) 15:00 and before Saturday (5) 02:00 AM
-        return (weekday == 4 and hour >= 15) or (weekday == 5 and hour < 2)
+        print(
+            "FRIYAY TEST:",
+            weekday_names[weekday],
+            "{:02d}:{:02d}".format(hour, minute),
+            "weekday:",
+            weekday
+        )
+
+        # Monday = 0, Sunday = 6
+        return weekday == 6 and hour >= 8
     
 # --------------------------------------------------------------------------------
 # StateController - Manages switching and delegates logic
@@ -1489,6 +1512,19 @@ class CoffeeState(BaseState):
 # --------------------------------------------------------------------------------
 
 def main():
+
+    print()
+
+    print("=" * 60)
+
+    print("MAIN.PY STARTED")
+
+    print("Reset cause:", machine.reset_cause())
+
+    print("RTC at startup:", machine.RTC().datetime())
+
+    print("=" * 60)
+
     # Initialize hardware
     np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
 
@@ -1548,10 +1584,29 @@ def main():
                         background_state['time_synced'] = True
                 
                 elif WiFiManager.check_connection():
-                    if controller.time_manager.sync_time():
+                    print("Background WiFi connection detected")
+                    print(
+                        "RTC before background sync:",
+                        machine.RTC().datetime()
+                    )
+
+                    sync_result = controller.time_manager.sync_time()
+
+                    print("Background sync result:", sync_result)
+                    print(
+                        "TimeManager.is_synced:",
+                        controller.time_manager.is_synced
+                    )
+                    print(
+                        "RTC after background sync:",
+                        machine.RTC().datetime()
+                    )
+
+                    if sync_result:
                         print("Background time sync successful")
                     else:
                         print("Background time sync failed")
+
                     background_state['time_synced'] = True
                     WiFiManager.disconnect()
                 
@@ -1621,9 +1676,25 @@ def main():
                             button_state['last_action_time'] = FORCE_UPDATE_TIME
             else:  # Released
                 if button_state['pressed']:
-                    press_duration = time.ticks_diff(current_time, button_state['press_start'])
-                    if press_duration < LONG_PRESS_TIME and button_state['last_action_time'] == 0:
-                        controller.handle_short_press()
+                    press_duration = time.ticks_diff(
+                        current_time,
+                        button_state['press_start']
+                    )
+
+                    if (
+                        press_duration < LONG_PRESS_TIME and
+                        button_state['last_action_time'] == 0
+                    ):
+                        if TEST_UPDATE_ON_SHORT_PRESS:
+                            print(
+                                "TEST: Short press triggering the same "
+                                "update flow as the nightly scheduler"
+                            )
+
+                            controller.switch_to(UpdateState(controller))
+                        else:
+                            controller.handle_short_press()
+
                     button_state['pressed'] = False
                     button_state['last_action_time'] = 0
 
