@@ -54,7 +54,7 @@ SCHEDULED_FRIYAY_CHECK = 60000  # 10 seconds
 FORCE_UPDATE = True  # Set this to True to force update regardless of version
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.18"
+CURRENT_VERSION = "1.0.19"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -1294,7 +1294,7 @@ class TimeManager:
     def is_friyay_time(self):
         """
         Temporary test:
-        Friyay is active on Sunday after 08:00.
+        Friyay starts Sunday at 09:25.
         """
 
         if not self.is_time_set():
@@ -1311,13 +1311,7 @@ class TimeManager:
         _, _, _, weekday, hour, minute, _, _ = dt
 
         weekday_names = [
-            'Mon',
-            'Tue',
-            'Wed',
-            'Thu',
-            'Fri',
-            'Sat',
-            'Sun'
+            'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'
         ]
 
         print(
@@ -1328,8 +1322,11 @@ class TimeManager:
             weekday
         )
 
-        # Monday = 0, Sunday = 6
-        return weekday == 6 and hour >= 8
+        # Change 9 and 25 to a few minutes in the future.
+        return (
+            weekday == 6 and
+            (hour > 9 or (hour == 9 and minute >= 25))
+        )
     
 # --------------------------------------------------------------------------------
 # StateController - Manages switching and delegates logic
