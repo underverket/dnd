@@ -104,7 +104,28 @@ When releasing a new version:
    - `main.py` (CURRENT_VERSION variable)
    - `firmware.json`
 
-2. Devices will automatically check for updates at midnight (3:00-3:45 AM) and will download and install if a newer version is available.
+2. Devices will automatically check for updates at a randomly selected minute between 03:00 and 04:00 local time and will download and install if a newer version is available.
+
+### Time and overnight update recovery
+
+- Failed WiFi or NTP attempts retry after one minute. Successful time syncs refresh daily.
+- Friyay uses the running clock; it does not need an active WiFi connection after time sync.
+- A check with no newer firmware, or a failed update attempt, returns to the display without rebooting.
+- Each device chooses a fresh random minute each night to spread firmware checks across 03:00–04:00. Random slots can overlap; they are not reserved per device.
+- The update schedule is held only in RAM: no schedule file is read or written. An old `last_update_check.json`, if present, is ignored.
+- If the first successful time sync after boot occurs at or after 03:00, the device waits until the following night for its first scheduled firmware check. This prevents repeated checks after an update reboot. A late WiFi recovery follows the same rule. Time sync and Friyay still operate normally.
+- Failed firmware checks wait until the following night; checks missed before 04:00 do not run during the day.
+- Holding the touch button for six seconds still forces a firmware download.
+
+Previously, boot-time WiFi/NTP failures were marked as finished and never retried. Since Friyay requires a successful time sync, a failed attempt after the nightly reboot disabled Friyay until another reboot. Forced nightly downloads and a check date held only in memory could also cause repeated reboots during the update window.
+
+Host regression tests (no Pico required):
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+For hardware verification, upload `main.py` and `firmware.json` together. Boot with the access point unavailable, then restore it: the device should sync within the next retry cycle without a power cycle. Also verify that a same-version nightly check returns to the display, and a newer-version install only happens once that night. Serial output distinguishes WiFi timeouts from NTP failures. Friyay is active Friday 15:00 through Saturday 01:59, and does not automatically override the red Busy status.
 
 ## Limitations
 

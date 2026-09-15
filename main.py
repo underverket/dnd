@@ -10,6 +10,7 @@ import time
 import json
 import ntptime
 import gc
+import random
 
 # --------------------------------------------------------------------------------
 # Hardware Configuration
@@ -21,9 +22,6 @@ BRIGHTNESS = 0.3
 # Use 0 for mechanical button (pressed = low)
 # Use 1 for TTP223 touch sensor in AB=00 mode (touched = high)
 BUTTON_PRESSED_VALUE = 1
-
-# Temporary update/reboot test
-TEST_UPDATE_ON_SHORT_PRESS = True
 
 # --------------------------------------------------------------------------------
 # Timing Configuration
@@ -48,13 +46,15 @@ POMODORO_SETUP_TIMEOUT = 5000   # 5 seconds before auto-starting pomodoro
 
 # Scheduled update check
 SCHEDULED_UPDATE_CHECK = 60000  # 1 minute
-SCHEDULED_FRIYAY_CHECK = 60000  # 10 seconds
+SCHEDULED_FRIYAY_CHECK = 60000  # 1 minute
+TIME_SYNC_RETRY_MS = 60000     # Retry failed WiFi/NTP attempts after 1 minute
+TIME_SYNC_INTERVAL_MS = 86400000  # Refresh the clock daily
 
 # GitHub OTA Update Configuration
-FORCE_UPDATE = True  # Set this to True to force update regardless of version
+FORCE_UPDATE = False  # Normal nightly checks only install newer firmware
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.19"
+CURRENT_VERSION = "1.0.21"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -142,8 +142,9 @@ class WiFiManager:
                 wlan = network.WLAN(network.STA_IF)
                 if wlan.isconnected():
                     wlan.disconnect()
-                    wlan.active(False)
-                    print("WiFi disconnected")
+                # Also stop an unsuccessful/pending connection attempt.
+                wlan.active(False)
+                print("WiFi disconnected")
             except Exception as e:
                 print(f"WiFi disconnect error: {e}")
 
@@ -971,6 +972,7 @@ class UpdateState(BaseState):
     def on_enter(self, **kwargs):
         super().on_enter(**kwargs)
         self.sub_state = UpdateSubState.CONNECTING
+        self.force = kwargs.get('force', FORCE_UPDATE)
         print("Starting update check...")
         self._fill_solid_color(self.COLORS['CONNECTING'])
         
@@ -1039,8 +1041,10 @@ class UpdateState(BaseState):
                 # Time has passed, proceed with state change
                 delattr(self, '_version_check_started')  # Reset for next time
                 
-                if self._update_info['version'] > CURRENT_VERSION or FORCE_UPDATE:
-                    if FORCE_UPDATE:
+                latest = tuple(int(part) for part in self._update_info['version'].split('.'))
+                current = tuple(int(part) for part in CURRENT_VERSION.split('.'))
+                if latest > current or self.force:
+                    if self.force:
                         print("Force update enabled - downloading firmware...")
                     else:
                         print(f"Update available: {self._update_info['version']}")
@@ -1050,7 +1054,7 @@ class UpdateState(BaseState):
                     self.sub_state = UpdateSubState.DOWNLOADING
                 else:
                     print("No update needed")
-                    safe_reset()
+                    self._return_to_display()
                     
         except Exception as e:
             self._handle_error("Version check failed", e)
@@ -1189,9 +1193,13 @@ class UpdateState(BaseState):
             self._fill_solid_color(self.COLORS['ERROR'])
             time.sleep(0.2)
         
-        # Brief pause before reboot
+        # Keep the valid clock and allow later network attempts after an error.
         time.sleep(0.5)
-        safe_reset()
+        self._return_to_display()
+
+    def _return_to_display(self):
+        WiFiManager.disconnect()
+        self.controller.switch_to(DefaultState(self.controller))
 
 # --------------------------------------------------------------------------------
 # Time Management
@@ -1203,6 +1211,37 @@ class TimeManager:
         self.rtc = machine.RTC()
         self.is_synced = False
         self.timezone_offset = 1  # Sweden is UTC+1 by default (CET)
+        self.connection_started = None
+        self.last_attempt = None
+        self.last_attempt_succeeded = False
+
+    def update_sync(self, current_time):
+        """Connect without blocking the display, retry failures, refresh daily."""
+        if self.connection_started is None:
+            interval = TIME_SYNC_INTERVAL_MS if self.last_attempt_succeeded else TIME_SYNC_RETRY_MS
+            if self.last_attempt is not None and time.ticks_diff(current_time, self.last_attempt) < interval:
+                return
+            self.connection_started = current_time
+            success, message = WiFiManager.start_connection()
+            if not success:
+                print(f"Background WiFi connection failed: {message}")
+                self._finish_attempt(False)
+        elif WiFiManager.check_connection():
+            self._finish_attempt(self.sync_time())
+        elif time.ticks_diff(current_time, self.connection_started) >= WIFI_TIMEOUT_SECONDS * 1000:
+            print("Background WiFi connection timed out; will retry in 60 seconds")
+            self._finish_attempt(False)
+
+    def _finish_attempt(self, succeeded):
+        self.last_attempt_succeeded = succeeded
+        self.last_attempt = time.ticks_ms()
+        self.connection_started = None
+        WiFiManager.disconnect()
+
+    def cancel_connection(self):
+        """Release a pending time connection before the updater takes WiFi."""
+        if self.connection_started is not None:
+            self._finish_attempt(False)
     
     def sync_time(self):
         """Synchronize RTC with network time and adjust for timezone."""
@@ -1233,7 +1272,9 @@ class TimeManager:
             if self._is_dst_simplified(mo, d):
                 offset_hours += 1
             
-            h = (h + offset_hours) % 24
+            # Shift the entire date, including weekday at midnight.
+            local = time.localtime(time.mktime((y, mo, d, h, mi, s, wd, 0)) + offset_hours * 3600)
+            y, mo, d, h, mi, s, wd, _ = local
             
             # Update RTC with adjusted time
             self.rtc.datetime((y, mo, d, wd, h, mi, s, ms))
@@ -1280,54 +1321,26 @@ class TimeManager:
         dt = self.rtc.datetime()
         return dt[0], dt[1], dt[2], dt[4], dt[5], dt[6]  # Year, month, day, hour, minute, second
 
-    def is_midnight(self):
-        """Check if it's update time (03:00-03:30)."""
-        dt = self.rtc.datetime()
-        _, _, _, _, h, m, _, _ = dt
-
-        # Debug override: Uncomment to force test time interval between 17:00 and 17:10
-        # return h == 17 and m < 10
-
-        # If after 3 AM and before 3:30 AM
-        return h == 3 and m < 45
-    
     def is_friyay_time(self):
-        """
-        Temporary test:
-        Friyay starts Sunday at 09:25.
-        """
+        """Check if it's FRIYAY time (Friday 15:00 to Saturday 02:00)."""
 
+        # Check if time is set, otherwise weekdays can be wrong.
         if not self.is_time_set():
-            print(
-                "FRIYAY TEST: Time is not set",
-                "RTC:",
-                self.rtc.datetime(),
-                "is_synced:",
-                self.is_synced
-            )
             return False
 
         dt = self.rtc.datetime()
         _, _, _, weekday, hour, minute, _, _ = dt
 
-        weekday_names = [
-            'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'
-        ]
+        # Debug: Print current time info
+        weekday_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        print(f"Current time: {weekday_names[weekday]} {hour:02d}:{minute:02d} (weekday={weekday})")
 
-        print(
-            "FRIYAY TEST:",
-            weekday_names[weekday],
-            "{:02d}:{:02d}".format(hour, minute),
-            "weekday:",
-            weekday
-        )
+        # Debug override: Uncomment to force test time interval between 17:00 and 17:10
+        # return hour == 15 and minute < 10
 
-        # Change 9 and 25 to a few minutes in the future.
-        return (
-            weekday == 6 and
-            (hour > 9 or (hour == 9 and minute >= 25))
-        )
-    
+        # If after Friday (4) 15:00 and before Saturday (5) 02:00 AM
+        return (weekday == 4 and hour >= 15) or (weekday == 5 and hour < 2)
+
 # --------------------------------------------------------------------------------
 # StateController - Manages switching and delegates logic
 # --------------------------------------------------------------------------------
@@ -1344,7 +1357,8 @@ class StateController:
         self.transition_data = {}  # For passing data between states
         self.selected_character = self._load_saved_character()  # Load saved character
         self.time_manager = TimeManager()  # Add time manager
-        self.last_day_checked = None  # For tracking latest updated day
+        self.update_schedule_date = None
+        self.update_minute = None
         self.last_friyay_check = time.ticks_ms()  # Add this line
     
     def _load_saved_character(self):
@@ -1381,6 +1395,9 @@ class StateController:
         """
         if self.current_state:
             self.current_state.on_exit()
+
+        if isinstance(new_state, UpdateState):
+            self.time_manager.cancel_connection()
             
         self.current_state = new_state
         self.current_state.on_enter(**kwargs)
@@ -1405,21 +1422,38 @@ class StateController:
         """Check if it's time for a scheduled update."""
         print("Checking for scheduled updates...")
 
+        if isinstance(self.current_state, UpdateState):
+            return
+
         if not self.time_manager.is_time_set():
             print("Time not set, skipping scheduled update check")
             return  # Can't check if time isn't set
         
-        # Get current date
-        current_date = self.time_manager.get_datetime()[:3]
+        dt = self.time_manager.get_datetime()
+        current_date = dt[:3]
+        hour, minute = dt[3:5]
 
-        # Only proceed if:
-        # 1. It's update time (3:00-3:30)
-        # 2. We haven't updated today
-        if (self.time_manager.is_midnight() and 
-            current_date != self.last_day_checked):
-            
+        if current_date != self.update_schedule_date:
+            first_schedule = self.update_schedule_date is None
+            self.update_schedule_date = current_date
+            self.update_minute = None
+            # First valid time after boot may arrive late because WiFi was down.
+            # Skip today's window if it has already started, including after OTA.
+            if first_schedule and hour >= 3:
+                print("First update schedule after 03:00; waiting until next night")
+                return
+            # Rejection sampling gives each minute an equal chance. MicroPython
+            # seeds its random generator automatically; do not use a fixed seed.
+            slot = random.getrandbits(6)
+            while slot >= 60:
+                slot = random.getrandbits(6)
+            self.update_minute = slot
+            print(f"Today's firmware check scheduled for 03:{slot:02d}")
+
+        if hour == 3 and self.update_minute is not None and minute >= self.update_minute:
+            # Consume the slot in RAM before starting, including failed checks.
+            self.update_minute = None
             print("🔄 Update time detected - initiating scheduled update")
-            self.last_day_checked = current_date
             self.switch_to(UpdateState(self))
 
     def check_scheduled_friyay(self):
@@ -1509,19 +1543,6 @@ class CoffeeState(BaseState):
 # --------------------------------------------------------------------------------
 
 def main():
-
-    print()
-
-    print("=" * 60)
-
-    print("MAIN.PY STARTED")
-
-    print("Reset cause:", machine.reset_cause())
-
-    print("RTC at startup:", machine.RTC().datetime())
-
-    print("=" * 60)
-
     # Initialize hardware
     np = neopixel.NeoPixel(machine.Pin(LED_PIN), NUM_LEDS)
 
@@ -1547,10 +1568,6 @@ def main():
     }
     
     background_state = {
-        'intro_complete': False,
-        'wifi_started': False,
-        'time_synced': False,
-        'wifi_start_time': None,
         'last_schedule_check': time.ticks_ms(),
         'last_friyay_check': time.ticks_ms()
     }
@@ -1563,53 +1580,12 @@ def main():
     while True:
         current_time = time.ticks_ms()
         
-        # Handle background tasks
-        if isinstance(controller.current_state, DefaultState):
-            # Track intro completion
-            if not background_state['intro_complete']:
-                if controller.current_state.sub_state != DefaultSubState.INTRO:
-                    background_state['intro_complete'] = True
-                    background_state['wifi_start_time'] = current_time
-            
-            # Handle WiFi and time sync
-            elif not background_state['time_synced']:
-                if not background_state['wifi_started']:
-                    success, message = WiFiManager.start_connection()
-                    background_state['wifi_started'] = True
-                    if not success:
-                        print(f"Background WiFi connection failed: {message}")
-                        background_state['time_synced'] = True
-                
-                elif WiFiManager.check_connection():
-                    print("Background WiFi connection detected")
-                    print(
-                        "RTC before background sync:",
-                        machine.RTC().datetime()
-                    )
-
-                    sync_result = controller.time_manager.sync_time()
-
-                    print("Background sync result:", sync_result)
-                    print(
-                        "TimeManager.is_synced:",
-                        controller.time_manager.is_synced
-                    )
-                    print(
-                        "RTC after background sync:",
-                        machine.RTC().datetime()
-                    )
-
-                    if sync_result:
-                        print("Background time sync successful")
-                    else:
-                        print("Background time sync failed")
-
-                    background_state['time_synced'] = True
-                    WiFiManager.disconnect()
-                
-                elif time.ticks_diff(current_time, background_state['wifi_start_time']) > WIFI_TIMEOUT_SECONDS * 1000:
-                    print("Background WiFi connection timed out")
-                    background_state['time_synced'] = True
+        # WiFi belongs to the updater while it is active. Otherwise keep
+        # recovering time sync, even when the user is in coffee/character mode.
+        if not isinstance(controller.current_state, UpdateState):
+            if not (isinstance(controller.current_state, DefaultState) and
+                    controller.current_state.sub_state == DefaultSubState.INTRO):
+                controller.time_manager.update_sync(current_time)
 
         # Update state and check schedules
         controller.update(current_time)
@@ -1669,29 +1645,13 @@ def main():
                     # Third threshold: Force update at 6 seconds
                     elif press_duration >= FORCE_UPDATE_TIME:
                         if button_state['last_action_time'] < FORCE_UPDATE_TIME:
-                            controller.switch_to(UpdateState(controller))
+                            controller.switch_to(UpdateState(controller), force=True)
                             button_state['last_action_time'] = FORCE_UPDATE_TIME
             else:  # Released
                 if button_state['pressed']:
-                    press_duration = time.ticks_diff(
-                        current_time,
-                        button_state['press_start']
-                    )
-
-                    if (
-                        press_duration < LONG_PRESS_TIME and
-                        button_state['last_action_time'] == 0
-                    ):
-                        if TEST_UPDATE_ON_SHORT_PRESS:
-                            print(
-                                "TEST: Short press triggering the same "
-                                "update flow as the nightly scheduler"
-                            )
-
-                            controller.switch_to(UpdateState(controller))
-                        else:
-                            controller.handle_short_press()
-
+                    press_duration = time.ticks_diff(current_time, button_state['press_start'])
+                    if press_duration < LONG_PRESS_TIME and button_state['last_action_time'] == 0:
+                        controller.handle_short_press()
                     button_state['pressed'] = False
                     button_state['last_action_time'] = 0
 
