@@ -106,6 +106,90 @@ When releasing a new version:
 
 2. Devices will automatically check for updates at a randomly selected minute between 03:00 and 04:00 local time and will download and install if a newer version is available.
 
+### On-device debug report
+
+Version 1.0.25 enables `DEBUG_MODE = True` in `main.py`. In normal status mode,
+**triple-tap** to scroll a report on the matrix. Tap once to close it, or let it
+finish; the previous status is restored. Set `DEBUG_MODE = False` to restore
+triple-tap coffee mode. Character selection and force-update holds are unchanged.
+
+Dots and colons use a single pixel column, with compact word spacing.
+Each message scrolls at 180 ms per pixel, with a one-second blank pause between
+messages. Colors identify the message type: **white** version, **cyan** weekday/time,
+**orange** schedule, and **purple** update result. A **green** `SYNC RETRY` message
+only appears if a later clock refresh failed while the clock is still valid.
+The color identifies the section, not whether it succeeded; read `OK`, `RETRY`,
+or `FAIL` for the result.
+
+The report is a snapshot taken when you open it:
+
+- `V 1.0.25`: firmware actually running on this device.
+- `WED 23:58`, for example: local weekday and time. Only shown after successful time synchronization; there is no separate `SYNC OK` message.
+- `TIME NOT SET`: no successful time sync since boot, so Friyay and scheduled updates are waiting.
+- `SYNC RETRY`: a later time-sync attempt failed; the previously synchronized clock is still running and the device will retry.
+- `AUTO 03:20`, for example: today's chosen firmware-check minute.
+- `AUTO 03-04`: the nightly window; no pending minute is currently selected for today. Tomorrow's minute is chosen after the date changes.
+- `AUTO WAIT`: waiting for a valid clock before scheduling updates.
+- `UPDATE NONE`: no firmware-check result since this boot.
+- `UPDATE OK`: the version check completed and no newer firmware was needed.
+- `UPDATE FAIL`: the latest update attempt failed.
+
+The report and update history stay in RAM and cause no flash writes. Installing
+firmware reboots the device, clearing that history: use the displayed version to
+confirm which firmware is running. Reopen the report for fresh information.
+
+To verify overnight behavior without a computer, check the report now for a valid
+time, then again tomorrow for `UPDATE OK` or `UPDATE FAIL`. If firmware was installed,
+expect the new version and `UPDATE NONE` after reboot. This cannot prove the cause
+of an arbitrary reboot, or guarantee a future WiFi connection.
+
+### Hotspot status webpage
+
+With `DEBUG_MODE = True` and `DEBUG_HOTSPOT_ENABLED = True`, triple-tapping
+also starts an open hotspot in the background:
+
+- **Network:** `DND-` followed by a six-character device ID, e.g. `DND-A1B2C3`.
+- **Password:** none.
+- **Duration:** five minutes from the latest debug triple-tap. Closing the report
+  does not close the hotspot; starting a firmware update does.
+- **Matrix:** a blue `AP DND-...` message identifies the hotspot, or `AP FAIL`
+  if startup failed.
+
+Upload this `main.py`, triple-tap, and look for the network in your phone or
+computer's WiFi list. Join it without a password. Your phone may offer a network
+sign-in page automatically. If it does not, open **http://192.168.4.1/** in your
+browser (use HTTP, not HTTPS). The server uses the AP address reported by the Pico;
+if that address has been customized, use its router address from your WiFi details.
+
+The page shows the same data and colors as the debug report: firmware,
+weekday/time, update schedule, last update result, and hotspot name. A failed clock
+refresh also shows `SYNC RETRY`. It also shows your current office status with
+**Available** (green), **Do not disturb** (red), and **Social** (rainbow) controls.
+The page checks live status every second without reloading: touch-button changes
+appear on the phone, and choosing a status on the phone changes the matrix. A
+phone selection closes the debug report and clears any partial triple-tap sequence.
+It can end coffee mode, but cannot interrupt firmware updates, character selection,
+or Pomodoro. If the hotspot disconnects, controls disable until it reconnects.
+
+The debug cards update alongside the live status. There are no external fonts,
+scripts, or internet dependencies; JavaScript must be enabled for live controls.
+Opening it does not extend the five-minute hotspot lifetime; triple-tap again to
+extend the session. It stops serving when the hotspot closes or an update begins.
+
+Captive DNS and HTTP probe responses help phones offer the page automatically,
+but the popup depends on the phone, DNS settings, and MicroPython networking.
+Manual access to the AP address works without captive DNS. There is no internet
+connection, persistent settings editor, or file browser. Reading the page and
+changing office status write nothing to flash.
+The whole page and server are embedded in `main.py`, so the existing OTA update
+flow includes them without any extra files.
+
+Routine time synchronization pauses while the hotspot is active and resumes
+when it closes. An already synchronized clock continues running. Scheduled and
+manual firmware updates take priority and close the hotspot before connecting.
+Set `DEBUG_HOTSPOT_ENABLED = False` to keep diagnostics without a hotspot;
+`DEBUG_MODE = False` restores the original coffee triple-tap.
+
 ### Time and overnight update recovery
 
 - Failed WiFi or NTP attempts retry after one minute. Successful time syncs refresh daily.

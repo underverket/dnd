@@ -11,6 +11,7 @@ import json
 import ntptime
 import gc
 import random
+import socket
 
 # --------------------------------------------------------------------------------
 # Hardware Configuration
@@ -34,6 +35,9 @@ BUTTON_DISCONNECT_THRESHOLD = 200  # Check at boot if button is disconnected
 
 # Features
 POMODORO_ENABLED = False # Enable or disable Pomodoro functionality
+DEBUG_MODE = True  # Triple-tap shows diagnostics; False restores coffee mode
+DEBUG_HOTSPOT_ENABLED = True
+DEBUG_HOTSPOT_DURATION_MS = 300000  # Automatically stop after 5 minutes
 
 # Coffee combo detection
 COFFEE_COMBO_TAPS = 3           # Number of rapid taps needed
@@ -54,7 +58,7 @@ TIME_SYNC_INTERVAL_MS = 86400000  # Refresh the clock daily
 FORCE_UPDATE = False  # Normal nightly checks only install newer firmware
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.21"
+CURRENT_VERSION = "1.0.25"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -151,6 +155,342 @@ class WiFiManager:
 # --------------------------------------------------------------------------------
 # Base State Class
 # --------------------------------------------------------------------------------
+class DebugWebServer:
+    """Bounded, nonblocking HTTP/DNS service on the hotspot interface only."""
+
+    CLIENT_TIMEOUT_MS = 5000
+    MAX_CLIENTS = 2
+    MAX_REQUEST = 2048
+
+    def __init__(self, controller, ip, port=80, dns_port=53):
+        self.controller = controller
+        self.ip = ip
+        self.port = port
+        self.dns_port = dns_port
+        self.listener = None
+        self.dns = None
+        self.clients = []
+
+    def start(self):
+        try:
+            self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            address = socket.getaddrinfo(self.ip, self.port, socket.AF_INET, socket.SOCK_STREAM)[0][-1]
+            self.listener.bind(address)
+            self.listener.listen(2)
+            self.listener.setblocking(False)
+        except Exception:
+            self.close()
+            raise
+        # DNS helps phones discover the captive page. HTTP still works if
+        # port 53 is unavailable on a particular MicroPython build.
+        if self.dns_port is not None:
+            try:
+                self.dns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                address = socket.getaddrinfo(self.ip, self.dns_port, socket.AF_INET, socket.SOCK_DGRAM)[0][-1]
+                self.dns.bind(address)
+                self.dns.setblocking(False)
+            except OSError as e:
+                print(f"Captive DNS unavailable; use http://{self.ip}/: {e}")
+                self._close_socket(self.dns)
+                self.dns = None
+
+    @staticmethod
+    def _close_socket(sock):
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def close(self):
+        for client in self.clients:
+            self._close_socket(client['socket'])
+        self.clients = []
+        self._close_socket(self.listener)
+        self._close_socket(self.dns)
+        self.listener = self.dns = None
+
+    @staticmethod
+    def _would_block(error):
+        return bool(error.args) and error.args[0] in (11, 35, 10035)
+
+    def _dns_reply(self, query):
+        # Only one uncompressed question; malformed packets are discarded.
+        if len(query) < 12 or query[2] & 0xf8 or query[4:6] != b'\x00\x01':
+            return None
+        end = 12
+        while end < len(query) and query[end]:
+            size = query[end]
+            if size > 63 or end + size + 1 >= len(query):
+                return None
+            end += size + 1
+        end += 1
+        if end + 4 > len(query):
+            return None
+        is_ipv4 = query[end:end + 4] == b'\x00\x01\x00\x01'
+        end += 4
+        count = b'\x00\x01' if is_ipv4 else b'\x00\x00'
+        response = query[:2] + b'\x81\x80\x00\x01' + count + b'\x00\x00\x00\x00' + query[12:end]
+        if is_ipv4:
+            response += b'\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x1e\x00\x04'
+            response += bytes(int(part) for part in self.ip.split('.'))
+        return response
+
+    @staticmethod
+    def _escape(text):
+        return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+    def render_page(self):
+        labels = {'V': 'Firmware', 'AUTO': 'Next update check', 'UPDATE': 'Last update result',
+                  'AP': 'Wi-Fi hotspot', 'SYNC': 'Clock refresh'}
+        cards = []
+        for message in self.controller.get_debug_messages():
+            prefix, _, value = message.partition(' ')
+            label = labels.get(prefix, 'Device time')
+            if prefix not in labels:
+                value = message
+            color = DiagnosticsState.MESSAGE_COLORS.get(prefix, DiagnosticsState.TIME_COLOR)
+            rgb = ','.join(str(channel) for channel in color)
+            cards.append('<section style="--accent:rgb(' + rgb + ')"><h2>' + label +
+                         '</h2><p>' + self._escape(value) + '</p></section>')
+        return '''<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DND · Device status</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101318;color:#f5f7fa;font:16px system-ui,sans-serif}
+main{max-width:700px;margin:auto;padding:40px 22px}header{display:flex;gap:16px;align-items:center;margin-bottom:30px}
+.mark{display:grid;grid-template-columns:repeat(3,7px);gap:4px;padding:15px;background:#202630;border-radius:16px}
+.mark i{width:7px;height:7px;background:#66e2bd;border-radius:2px}.mark i:nth-child(3n){background:#59c5ed}
+h1{font-size:28px;letter-spacing:-1px;margin:0 0 5px}header p{margin:0;color:#9eaaba;font-size:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}section{min-width:0;padding:20px;background:#1b212a;border:1px solid #2b3440;border-top:3px solid var(--accent);border-radius:12px}
+h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#aab5c4;margin:0 0 12px}
+section p{margin:0;color:var(--accent);font-size:22px;font-weight:650;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+footer{color:#aab5c4;font-size:13px;line-height:1.65;margin-top:24px}footer p{margin:12px 0}
+a{display:inline-block;color:#101318;background:#e4edf5;border-radius:8px;padding:10px 16px;text-decoration:none;font-weight:650}
+a:focus-visible{outline:3px solid #59c5ed;outline-offset:4px}
+.controls{margin-bottom:24px;padding:20px;background:#1b212a;border:1px solid #2b3440;border-radius:12px}
+.current{display:flex;align-items:center;gap:10px;margin:0 0 18px;font-size:22px;font-weight:650}
+.dot{width:16px;height:16px;flex-shrink:0;border-radius:50%;background:#9eaaba}
+.available{background:#66e2a1}.busy{background:#ff6e79}.social{background:linear-gradient(120deg,#ff687a,#ffd46b,#6be9aa,#64caff,#c38aff)}
+.choices{display:flex;flex-wrap:wrap;gap:8px}button{font:inherit;cursor:pointer;border-radius:9px;padding:12px;border:1px solid #4a5668;background:#242d39;color:#f5f7fa;display:flex;align-items:center;gap:8px}
+button[aria-pressed=true]{border-color:#f5f7fa;box-shadow:0 0 0 1px #f5f7fa}button:disabled{opacity:.45;cursor:default}button:focus-visible{outline:3px solid #59c5ed;outline-offset:3px}
+#connection,#display-note{color:#aab5c4;font-size:13px;line-height:1.5;margin:12px 0 0}
+@media(max-width:420px){main{padding:28px 18px}.grid{grid-template-columns:1fr}section{padding:16px}}
+</style></head><body><main><header><div class="mark" aria-hidden="true">
+<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<div><h1>Your DND</h1><p>Device status · Local connection</p></div></header>
+<div class="controls"><h2>Office status</h2><p class="current" aria-live="polite"><span id="status-dot" class="dot"></span><span id="current-status">Connecting...</span></p>
+<div class="choices" role="group" aria-label="Change office status">
+<button type="button" data-status="available" aria-pressed="false" disabled><span class="dot available" aria-hidden="true"></span>Available</button>
+<button type="button" data-status="busy" aria-pressed="false" disabled><span class="dot busy" aria-hidden="true"></span>Do not disturb</button>
+<button type="button" data-status="social" aria-pressed="false" disabled><span class="dot social" aria-hidden="true"></span>Social</button></div>
+<p id="display-note"></p><p id="connection" role="status">Connecting to your device...</p></div>
+<div id="debug-cards" class="grid">''' + ''.join(cards) + '''</div><footer>
+<p>Status updates every second. <strong>NONE</strong> means no update result since boot;
+<strong>OK</strong> means no newer firmware was needed; <strong>FAIL</strong> means the last attempt failed.</p>
+<p>The hotspot closes five minutes after your last debug triple-tap. Triple-tap again to extend it.
+This network has no internet access.</p><a href="/">Refresh now</a>
+</footer></main><script>
+const buttons=Array.from(document.querySelectorAll('[data-status]'));
+let pending=false, timer=null, queued=null;
+const connection=document.getElementById('connection');
+const labels={V:'Firmware',AUTO:'Next update check',UPDATE:'Last update result',AP:'Wi-Fi hotspot',SYNC:'Clock refresh'};
+const colors={V:'#ffffff',AUTO:'#ff9600',UPDATE:'#e646ff',AP:'#5064ff',SYNC:'#50ff50'};
+function show(data){
+ document.getElementById('current-status').textContent=data.label;
+ document.getElementById('status-dot').className='dot '+(data.status||'');
+ document.getElementById('display-note').textContent=data.display;
+ buttons.forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.status===data.status));b.disabled=!data.can_control;});
+ connection.textContent='Connected · Changes appear on the device';
+ const cards=document.getElementById('debug-cards');cards.replaceChildren();
+ data.messages.forEach(message=>{const split=message.indexOf(' '),prefix=message.slice(0,split);
+  const card=document.createElement('section');card.style.setProperty('--accent',colors[prefix]||'#00dcff');
+  const title=document.createElement('h2');title.textContent=labels[prefix]||'Device time';
+  const value=document.createElement('p');value.textContent=labels[prefix]?message.slice(split+1):message;
+  card.append(title,value);cards.append(card);
+ });
+}
+async function exchange(status){
+ if(pending){if(status)queued=status;return;}pending=true;clearTimeout(timer);if(status)buttons.forEach(b=>b.disabled=true);
+ const abort=new AbortController(), timeout=setTimeout(()=>abort.abort(),4000);
+ try{
+  const path=status?'/api/status/'+status:'/api/status';
+  const options={cache:'no-store',signal:abort.signal};
+  if(status){options.method='POST';options.headers={'X-DND-Control':'1'};connection.textContent='Applying status...';}
+  const response=await fetch(path,options);const data=await response.json();
+  if(!response.ok){throw new Error(data.error||'Device unavailable');}
+  show(data);
+ }catch(error){connection.textContent='Could not reach or change the device. Reconnect to its hotspot to retry.';buttons.forEach(b=>b.disabled=true);}
+ finally{clearTimeout(timeout);pending=false;if(queued){const next=queued;queued=null;exchange(next);}else{timer=setTimeout(()=>exchange(),1000);}}
+}
+buttons.forEach(b=>b.addEventListener('click',()=>exchange(b.dataset.status)));
+exchange();
+</script></body></html>'''
+
+    def _response(self, request):
+        fields = request.split(b'\r\n', 1)[0].split()
+        content_type = 'text/html; charset=utf-8'
+        if len(fields) != 3:
+            status, body = '400 Bad Request', b'Invalid request'
+        elif fields[1] == b'/api/status' and fields[0] in (b'GET', b'HEAD'):
+            status = '200 OK'
+            content_type = 'application/json'
+            body = json.dumps(self.controller.get_status_snapshot()).encode()
+        elif fields[1].startswith(b'/api/status/') and fields[0] == b'POST':
+            content_type = 'application/json'
+            headers = {}
+            for line in request.split(b'\r\n')[1:]:
+                if b':' in line:
+                    key, value = line.split(b':', 1)
+                    headers[key.strip().lower()] = value.strip()
+            # A custom header prevents ordinary cross-site forms from changing
+            # status. No CORS access is granted; controls belong to this page.
+            origin = headers.get(b'origin')
+            expected_origin = b'http://' + headers.get(b'host', b'')
+            if headers.get(b'x-dnd-control') != b'1' or (origin and origin != expected_origin):
+                status, result = '403 Forbidden', {'error': 'Use the device page to change status'}
+            else:
+                choice = fields[1][len(b'/api/status/'):]
+                if choice not in (b'available', b'busy', b'social'):
+                    status, result = '400 Bad Request', {'error': 'Unknown status'}
+                elif not self.controller.set_office_status(choice.decode()):
+                    status, result = '409 Conflict', {'error': 'Finish the current device mode first'}
+                else:
+                    status, result = '200 OK', self.controller.get_status_snapshot()
+            body = json.dumps(result).encode()
+        elif fields[0] not in (b'GET', b'HEAD'):
+            status, body = '405 Method Not Allowed', b'Method not allowed'
+        else:
+            # Serve the page for OS captive-portal probe paths as well as /.
+            status, body = '200 OK', self.render_page().encode('utf-8')
+        headers = ('HTTP/1.1 ' + status + '\r\nContent-Type: ' + content_type + '\r\n'
+                   'Content-Length: ' + str(len(body)) + '\r\nCache-Control: no-store\r\n'
+                   'Connection: close\r\n\r\n').encode()
+        return headers + (b'' if fields and fields[0] == b'HEAD' else body)
+
+    def update(self, current_time):
+        if self.dns is not None:
+            try:
+                query, peer = self.dns.recvfrom(512)
+                reply = self._dns_reply(query)
+                if reply:
+                    self.dns.sendto(reply, peer)
+            except OSError:
+                pass
+        if self.listener is None:
+            return
+        try:
+            conn, _ = self.listener.accept()
+            if len(self.clients) >= self.MAX_CLIENTS:
+                self._close_socket(conn)
+            else:
+                conn.setblocking(False)
+                self.clients.append({'socket': conn, 'started': current_time,
+                                     'request': b'', 'response': None, 'sent': 0})
+        except OSError:
+            pass
+        for client in self.clients[:]:
+            finished = time.ticks_diff(current_time, client['started']) >= self.CLIENT_TIMEOUT_MS
+            if not finished:
+                try:
+                    conn = client['socket']
+                    if client['response'] is None:
+                        chunk = conn.recv(512)
+                        if not chunk:
+                            finished = True
+                        else:
+                            client['request'] += chunk
+                            if len(client['request']) > self.MAX_REQUEST:
+                                finished = True
+                            elif b'\r\n\r\n' in client['request']:
+                                client['response'] = self._response(client['request'])
+                                client['request'] = b''
+                    else:
+                        sent = client['sent']
+                        count = conn.send(client['response'][sent:sent + 512])
+                        if count:
+                            client['sent'] += count
+                        finished = not count or client['sent'] >= len(client['response'])
+                except OSError as e:
+                    finished = not self._would_block(e)
+            if finished:
+                self._close_socket(client['socket'])
+                self.clients.remove(client)
+
+
+class DebugHotspot:
+    """Temporary access point with diagnostic and office-status controls."""
+
+    def __init__(self, controller):
+        self.controller = controller
+        self.web = None
+        self.web_error = None
+        self.ip = None
+        self.ap = None
+        self.started_at = None
+        self.ssid = None
+        self.error = None
+
+    def is_active(self):
+        return self.started_at is not None
+
+    def start(self):
+        self.error = None
+        if self.is_active():
+            self.started_at = time.ticks_ms()  # Extend without dropping clients.
+            return True
+        try:
+            suffix = ''.join('{:02X}'.format(b) for b in machine.unique_id()[-3:])
+            self.ssid = 'DND-' + suffix
+            self.ap = network.WLAN(network.AP_IF)
+            self.ap.active(False)
+            self.ap.config(ssid=self.ssid, security=network.WLAN.SEC_OPEN, key='')
+            self.ap.active(True)
+            if not self.ap.active():
+                raise OSError('Access point did not activate')
+            self.started_at = time.ticks_ms()
+            self.ip = self.ap.ifconfig()[0]
+            self.web_error = None
+            try:
+                self.web = DebugWebServer(self.controller, self.ip)
+                self.web.start()
+                print(f"Debug page: http://{self.ip}/")
+            except Exception as e:
+                self.web_error = str(e)
+                print(f"Debug webpage failed: {e}")
+                if self.web:
+                    self.web.close()
+                self.web = None
+            print(f"Debug hotspot started: {self.ssid} (5 minutes)")
+            return True
+        except Exception as e:
+            self.error = str(e)
+            print(f"Debug hotspot failed: {e}")
+            self.stop()
+            return False
+
+    def stop(self):
+        if self.web:
+            self.web.close()
+            self.web = None
+        try:
+            # Also clears an AP left running by a development soft reset.
+            if self.ap is None:
+                self.ap = network.WLAN(network.AP_IF)
+            self.ap.active(False)
+        except Exception as e:
+            print(f"Debug hotspot shutdown failed: {e}")
+        self.started_at = None
+
+    def update(self, current_time):
+        if self.is_active() and time.ticks_diff(current_time, self.started_at) >= DEBUG_HOTSPOT_DURATION_MS:
+            self.stop()
+            print("Debug hotspot expired")
+        elif self.is_active() and self.web:
+            self.web.update(current_time)
+
+
 class BaseState:
     """Abstract base class for states."""
     def __init__(self, controller):
@@ -646,8 +986,18 @@ class DefaultState(BaseState):
                 
                 # Check for rapid taps
                 if len(self.tap_combo) >= COFFEE_COMBO_TAPS:
-                    print(f"🎉 {COFFEE_COMBO_TAPS} rapid taps detected - Coffee time!")
-                    self.controller.switch_to(CoffeeState(self.controller))
+                    if DEBUG_MODE:
+                        # The first two taps already cycled the status. Restore
+                        # the status from before the combo when closing the report.
+                        cycle = DefaultSubState.CYCLE_STATES
+                        index = cycle.index(self.sub_state)
+                        self.sub_state = cycle[(index - (COFFEE_COMBO_TAPS - 1)) % len(cycle)]
+                        if DEBUG_HOTSPOT_ENABLED:
+                            self.controller.start_debug_hotspot()
+                        self.controller.switch_to(DiagnosticsState(self.controller, self))
+                    else:
+                        print(f"🎉 {COFFEE_COMBO_TAPS} rapid taps detected - Coffee time!")
+                        self.controller.switch_to(CoffeeState(self.controller))
                     self.tap_combo = []  # Reset combo
                     return
                     
@@ -682,8 +1032,6 @@ class DefaultState(BaseState):
                 self.controller.switch_to(PomodoroState(self.controller))
             else:
                 print("Long press: Pomodoro disabled")
-                # Optional: could do something else here, like flash a color briefly
-                pass
     
     def update_display(self):
         if self.sub_state == DefaultSubState.INTRO:
@@ -778,6 +1126,109 @@ class DefaultState(BaseState):
                 text_x_pos += char_widths[char] + 1  # Add a 1px gap between characters
         
         self.controller.np.write()
+
+# --------------------------------------------------------------------------------
+# On-device diagnostics (no flash writes)
+# --------------------------------------------------------------------------------
+class DiagnosticsState(BaseState):
+    """Scroll a snapshot of the clock and updater, then restore the status."""
+
+    SCROLL_MS = 180
+    MESSAGE_PAUSE_MS = 1000
+    MESSAGE_COLORS = {
+        'V': (255, 255, 255),       # Version: white
+        'SYNC': (80, 255, 80),      # Failed clock refresh: green
+        'AUTO': (255, 150, 0),      # Automatic update schedule: orange
+        'UPDATE': (230, 70, 255),   # Last update result: purple
+        'AP': (80, 100, 255),       # Test hotspot: blue
+    }
+    TIME_COLOR = (0, 220, 255)      # Weekday/time or unset clock: cyan
+    WEEKDAYS = ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
+    # Compact 3x5 glyphs, top row first. Each digit encodes three pixels.
+    FONT = {
+        '0': '75557', '1': '26227', '2': '71747', '3': '71717',
+        '4': '55711', '5': '74717', '6': '74757', '7': '71111',
+        '8': '75757', '9': '75717', 'A': '25755', 'B': '65656',
+        'C': '74447', 'D': '65556', 'E': '74647', 'F': '74644',
+        'G': '74557', 'H': '55755', 'I': '72227', 'J': '11152',
+        'K': '55655', 'L': '44447', 'M': '57755', 'N': '57775',
+        'O': '75557', 'P': '75744', 'Q': '75573', 'R': '75655',
+        'S': '74717', 'T': '72222', 'U': '55557', 'V': '55552',
+        'W': '55775', 'X': '55255', 'Y': '55222', 'Z': '71247',
+        ':': '02020', '.': '00002', '-': '00700', ' ': '00000',
+    }
+
+    def __init__(self, controller, previous_state):
+        super().__init__(controller)
+        self.previous_state = previous_state
+
+    def _text_columns(self, text):
+        """Trim empty glyph edges so punctuation uses only one pixel column."""
+        columns = []
+        for char in text:
+            if char == ' ':
+                columns.extend((0, 0))
+                continue
+            glyph = self.FONT[char]
+            pixels = [sum((1 << row) for row, bits in enumerate(glyph)
+                          if int(bits) & (4 >> col)) for col in range(3)]
+            while pixels and pixels[0] == 0:
+                pixels.pop(0)
+            while pixels and pixels[-1] == 0:
+                pixels.pop()
+            columns.extend(pixels)
+            columns.append(0)  # One blank column between adjacent glyphs.
+        return columns
+
+    def on_enter(self):
+        super().on_enter()
+        parts = self.controller.get_debug_messages()
+        self.text = '   '.join(parts)
+        self.messages = parts
+        self.message_columns = [self._text_columns(part) for part in parts]
+        self.message_index = 0
+        self.position = 0
+        self.paused = False
+        self.total_duration_ms = sum((len(columns) + 8) * self.SCROLL_MS
+                                     for columns in self.message_columns)
+        self.total_duration_ms += (len(parts) - 1) * self.MESSAGE_PAUSE_MS
+
+    def update(self, current_time):
+        elapsed = time.ticks_diff(current_time, self.entry_time)
+        for index, columns in enumerate(self.message_columns):
+            scroll_duration = (len(columns) + 8) * self.SCROLL_MS
+            pause = self.MESSAGE_PAUSE_MS if index < len(self.messages) - 1 else 0
+            if elapsed < scroll_duration + pause:
+                self.message_index = index
+                self.paused = elapsed >= scroll_duration
+                self.position = elapsed // self.SCROLL_MS
+                return
+            elapsed -= scroll_duration + pause
+        self.handle_short_press()
+
+    def handle_short_press(self):
+        # Resume the same status, including Busy, without restarting its intro.
+        self.on_exit()
+        self.controller.current_state = self.previous_state
+        self.controller.check_scheduled_friyay()
+
+    def update_display(self):
+        self.controller.np.fill((0, 0, 0))
+        if self.paused:
+            self.controller.np.write()
+            return
+        message = self.messages[self.message_index]
+        base_color = self.MESSAGE_COLORS.get(message.split(' ', 1)[0], self.TIME_COLOR)
+        color = tuple(int(c * BRIGHTNESS) for c in base_color)
+        columns = self.message_columns[self.message_index]
+        for col in range(8):
+            source = self.position - 8 + col
+            if 0 <= source < len(columns):
+                for row in range(5):
+                    if columns[source] & (1 << row):
+                        self.controller.np[self._get_pixel_index(row + 1, col)] = color
+        self.controller.np.write()
+
 
 # --------------------------------------------------------------------------------
 # CharactersState
@@ -973,6 +1424,7 @@ class UpdateState(BaseState):
         super().on_enter(**kwargs)
         self.sub_state = UpdateSubState.CONNECTING
         self.force = kwargs.get('force', FORCE_UPDATE)
+        self.controller.last_update_result = "CHECKING"
         print("Starting update check...")
         self._fill_solid_color(self.COLORS['CONNECTING'])
         
@@ -1054,6 +1506,7 @@ class UpdateState(BaseState):
                     self.sub_state = UpdateSubState.DOWNLOADING
                 else:
                     print("No update needed")
+                    self.controller.last_update_result = "OK"
                     self._return_to_display()
                     
         except Exception as e:
@@ -1184,6 +1637,7 @@ class UpdateState(BaseState):
         """Centralized error handling with flashing animation."""
         print(f"{message}: {error}")
         self.error = str(error)
+        self.controller.last_update_result = "FAIL"
         self.sub_state = UpdateSubState.ERROR
         
         # Flash red 3 times
@@ -1357,9 +1811,101 @@ class StateController:
         self.transition_data = {}  # For passing data between states
         self.selected_character = self._load_saved_character()  # Load saved character
         self.time_manager = TimeManager()  # Add time manager
+        self.hotspot = DebugHotspot(self)
         self.update_schedule_date = None
         self.update_minute = None
+        self.last_update_result = "NONE"
         self.last_friyay_check = time.ticks_ms()  # Add this line
+
+    def get_status_snapshot(self):
+        state = self.current_state
+        display = ''
+        if isinstance(state, DiagnosticsState):
+            state = state.previous_state
+            display = 'The matrix is showing the debug report. Choose a status to return to it.'
+        status = None
+        can_control = isinstance(state, (DefaultState, CoffeeState))
+        if isinstance(state, DefaultState):
+            status = state.sub_state
+            label = {
+                DefaultSubState.AVAILABLE: 'Available',
+                DefaultSubState.BUSY: 'Do not disturb',
+                DefaultSubState.SOCIAL: 'Social',
+                DefaultSubState.FRIYAY: 'Friyay',
+                DefaultSubState.INTRO: 'Starting up',
+            }.get(status, 'Starting up')
+        elif isinstance(state, CoffeeState):
+            label = 'On a break'
+        elif isinstance(state, UpdateState):
+            label = 'Updating firmware'
+        elif isinstance(state, CharactersState):
+            label = 'Choosing a character'
+        elif isinstance(state, PomodoroState):
+            label = 'Pomodoro'
+        else:
+            label = 'Starting up'
+        if not can_control:
+            display = 'Finish the current device mode before changing office status.'
+        return {'status': status, 'label': label, 'can_control': can_control,
+                'display': display, 'messages': self.get_debug_messages()}
+
+    def set_office_status(self, status):
+        if status not in DefaultSubState.BASE_CYCLE_STATES:
+            return False
+        state = self.current_state
+        if isinstance(state, DiagnosticsState):
+            state = state.previous_state
+            if not isinstance(state, DefaultState):
+                return False
+            self.current_state.on_exit()
+            self.current_state = state
+        elif isinstance(state, CoffeeState):
+            state = DefaultState(self)
+            self.switch_to(state)
+        elif not isinstance(state, DefaultState):
+            return False
+        state.sub_state = status
+        state.tap_combo = []
+        # Same DefaultState renderer as touch input, without writing settings.
+        print(f"Web status: {status}")
+        return True
+
+    def get_debug_messages(self):
+        tm = self.time_manager
+        parts = ['V ' + CURRENT_VERSION]
+        if tm.is_time_set():
+            y, mo, d, weekday, h, mi, _, _ = tm.rtc.datetime()
+            parts.append(f"{DiagnosticsState.WEEKDAYS[weekday]} {h:02d}:{mi:02d}")
+            if tm.last_attempt is not None and not tm.last_attempt_succeeded:
+                parts.append('SYNC RETRY')
+            minute = self.update_minute
+            if minute is not None and self.update_schedule_date == (y, mo, d):
+                parts.append(f"AUTO 03:{minute:02d}")
+            else:
+                parts.append('AUTO 03-04')
+        else:
+            parts.extend(['TIME NOT SET', 'AUTO WAIT'])
+        parts.append('UPDATE ' + self.last_update_result)
+        if self.hotspot.is_active():
+            parts.append('AP ' + self.hotspot.ssid)
+        elif self.hotspot.error:
+            parts.append('AP FAIL')
+        return parts
+
+    def start_debug_hotspot(self):
+        if not self.hotspot.is_active():
+            self.time_manager.cancel_connection()
+            WiFiManager.disconnect()
+        self.hotspot.start()
+
+    def update_background_network(self, current_time):
+        self.hotspot.update(current_time)
+        # Keep AP mode stable while testing. The updater can end it early;
+        # regular clock sync resumes after the five-minute timeout.
+        if not self.hotspot.is_active() and not isinstance(self.current_state, UpdateState):
+            if not (isinstance(self.current_state, DefaultState) and
+                    self.current_state.sub_state == DefaultSubState.INTRO):
+                self.time_manager.update_sync(current_time)
     
     def _load_saved_character(self):
         """Load the saved character ID from storage."""
@@ -1397,6 +1943,7 @@ class StateController:
             self.current_state.on_exit()
 
         if isinstance(new_state, UpdateState):
+            self.hotspot.stop()
             self.time_manager.cancel_connection()
             
         self.current_state = new_state
@@ -1552,6 +2099,7 @@ def main():
 
     button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
     controller = StateController(np)
+    controller.hotspot.stop()
 
     # Check if button is disconnected at boot time
     button_disconnected = check_button_disconnected(button, BUTTON_DISCONNECT_THRESHOLD)
@@ -1580,12 +2128,7 @@ def main():
     while True:
         current_time = time.ticks_ms()
         
-        # WiFi belongs to the updater while it is active. Otherwise keep
-        # recovering time sync, even when the user is in coffee/character mode.
-        if not isinstance(controller.current_state, UpdateState):
-            if not (isinstance(controller.current_state, DefaultState) and
-                    controller.current_state.sub_state == DefaultSubState.INTRO):
-                controller.time_manager.update_sync(current_time)
+        controller.update_background_network(current_time)
 
         # Update state and check schedules
         controller.update(current_time)
