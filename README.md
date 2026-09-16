@@ -152,8 +152,12 @@ also starts an open hotspot in the background:
 - **Password:** none.
 - **Duration:** five minutes from the latest debug triple-tap. Closing the report
   does not close the hotspot; starting a firmware update does.
-- **Matrix:** a blue `AP DND-...` message identifies the hotspot, or `AP FAIL`
-  if startup failed.
+- **Matrix:** a blue `AP DND-...` message identifies the hotspot. If startup
+  fails, it shows `AP FAIL CONFIG`, `AP FAIL RADIO`, or `AP FAIL ADDRESS`
+  (or `AP FAIL ID` for a device-ID error), followed by `MP x.y.z`, the
+  MicroPython runtime version. Send both messages when troubleshooting.
+  The same `main.py` can run on different runtime versions; OTA updates here
+  replace application code, not the underlying MicroPython firmware.
 
 Upload this `main.py`, triple-tap, and look for the network in your phone or
 computer's WiFi list. Join it without a password. Your phone may offer a network

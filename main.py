@@ -12,6 +12,7 @@ import ntptime
 import gc
 import random
 import socket
+import sys
 
 # --------------------------------------------------------------------------------
 # Hardware Configuration
@@ -59,7 +60,7 @@ FORCE_UPDATE = False  # Normal nightly checks only install newer firmware
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 UPDATE_WIFI_TIMEOUT_SECONDS = 30  # Allow association and DHCP after AP mode
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.26"
+CURRENT_VERSION = "1.0.27"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -467,26 +468,35 @@ class DebugHotspot:
         self.started_at = None
         self.ssid = None
         self.error = None
+        self.error_stage = None
 
     def is_active(self):
         return self.started_at is not None
 
     def start(self):
         self.error = None
+        self.error_stage = None
         if self.is_active():
             self.started_at = time.ticks_ms()  # Extend without dropping clients.
             return True
         try:
+            self.error_stage = 'ID'
             suffix = ''.join('{:02X}'.format(b) for b in machine.unique_id()[-3:])
             self.ssid = 'DND-' + suffix
+            self.error_stage = 'CONFIG'
             self.ap = network.WLAN(network.AP_IF)
             self.ap.active(False)
-            self.ap.config(ssid=self.ssid, security=network.WLAN.SEC_OPEN, key='')
+            # CYW43's open security value is zero. Older runtime builds may
+            # support AP mode without exposing the newer named constant.
+            open_security = getattr(network.WLAN, 'SEC_OPEN', 0)
+            self.ap.config(ssid=self.ssid, security=open_security, key='')
             WiFiManager.needs_radio_reset = True
+            self.error_stage = 'RADIO'
             self.ap.active(True)
             if not self.ap.active():
                 raise OSError('Access point did not activate')
             self.started_at = time.ticks_ms()
+            self.error_stage = 'ADDRESS'
             self.ip = self.ap.ifconfig()[0]
             self.web_error = None
             try:
@@ -500,6 +510,7 @@ class DebugHotspot:
                     self.web.close()
                 self.web = None
             print(f"Debug hotspot started: {self.ssid} (5 minutes)")
+            self.error_stage = None
             return True
         except Exception as e:
             self.error = str(e)
@@ -1178,6 +1189,7 @@ class DiagnosticsState(BaseState):
         'AUTO': (255, 150, 0),      # Automatic update schedule: orange
         'UPDATE': (230, 70, 255),   # Last update result: purple
         'AP': (80, 100, 255),       # Test hotspot: blue
+        'MP': (80, 100, 255),       # Runtime version when hotspot startup fails
     }
     TIME_COLOR = (0, 220, 255)      # Weekday/time or unset clock: cyan
     WEEKDAYS = ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
@@ -1947,7 +1959,9 @@ class StateController:
         if self.hotspot.is_active():
             parts.append('AP ' + self.hotspot.ssid)
         elif self.hotspot.error:
-            parts.append('AP FAIL')
+            parts.append('AP FAIL ' + (self.hotspot.error_stage or 'UNKNOWN'))
+            version = sys.implementation.version
+            parts.append('MP {}.{}.{}'.format(version[0], version[1], version[2]))
         return parts
 
     def start_debug_hotspot(self):
