@@ -57,8 +57,9 @@ TIME_SYNC_INTERVAL_MS = 86400000  # Refresh the clock daily
 # GitHub OTA Update Configuration
 FORCE_UPDATE = False  # Normal nightly checks only install newer firmware
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
+UPDATE_WIFI_TIMEOUT_SECONDS = 30  # Allow association and DHCP after AP mode
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.25"
+CURRENT_VERSION = "1.0.26"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -94,6 +95,7 @@ def safe_reset():
 
 class WiFiManager:
     """Centralized WiFi connection management."""
+    needs_radio_reset = False
     
     @staticmethod
     def start_connection():
@@ -104,6 +106,23 @@ class WiFiManager:
                 raise Exception("No WiFi credentials")
 
             wlan = network.WLAN(network.STA_IF)
+
+            if WiFiManager.needs_radio_reset:
+                # AP and STA share the CYW43 driver. Disabling AP alone does
+                # not reinitialize that driver after serving the hotspot.
+                ap = network.WLAN(network.AP_IF)
+                ap.active(False)
+                if ap.active():
+                    raise OSError("Hotspot did not stop")
+                try:
+                    wlan.disconnect()
+                except OSError:
+                    pass
+                wlan.active(False)
+                wlan.deinit()
+                time.sleep(1)
+                WiFiManager.needs_radio_reset = False
+                print("WiFi driver reset after hotspot/retry")
 
             # If already connected, do nothing
             if wlan.isconnected():
@@ -137,6 +156,17 @@ class WiFiManager:
         """Check current connection status."""
         wlan = network.WLAN(network.STA_IF)
         return wlan.isconnected()
+
+    @staticmethod
+    def connection_details():
+        """Capture connection state before error recovery changes it."""
+        try:
+            wlan = network.WLAN(network.STA_IF)
+            ap = network.WLAN(network.AP_IF)
+            return 'status={} station={} hotspot={} ip={}'.format(
+                wlan.status(), wlan.active(), ap.active(), wlan.ifconfig()[0])
+        except Exception as e:
+            return 'Connection details unavailable: {}'.format(e)
     
     @staticmethod
     def disconnect():
@@ -254,6 +284,9 @@ class DebugWebServer:
             rgb = ','.join(str(channel) for channel in color)
             cards.append('<section style="--accent:rgb(' + rgb + ')"><h2>' + label +
                          '</h2><p>' + self._escape(value) + '</p></section>')
+        if self.controller.last_update_error:
+            cards.append('<section style="--accent:#ff6e79"><h2>Update error</h2><p>' +
+                         self._escape(self.controller.last_update_error) + '</p></section>')
         return '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DND · Device status</title>
@@ -310,6 +343,9 @@ function show(data){
   const value=document.createElement('p');value.textContent=labels[prefix]?message.slice(split+1):message;
   card.append(title,value);cards.append(card);
  });
+ if(data.update_error){const card=document.createElement('section');card.style.setProperty('--accent','#ff6e79');
+  const title=document.createElement('h2');title.textContent='Update error';
+  const value=document.createElement('p');value.textContent=data.update_error;card.append(title,value);cards.append(card);}
 }
 async function exchange(status){
  if(pending){if(status)queued=status;return;}pending=true;clearTimeout(timer);if(status)buttons.forEach(b=>b.disabled=true);
@@ -446,6 +482,7 @@ class DebugHotspot:
             self.ap = network.WLAN(network.AP_IF)
             self.ap.active(False)
             self.ap.config(ssid=self.ssid, security=network.WLAN.SEC_OPEN, key='')
+            WiFiManager.needs_radio_reset = True
             self.ap.active(True)
             if not self.ap.active():
                 raise OSError('Access point did not activate')
@@ -1425,6 +1462,9 @@ class UpdateState(BaseState):
         self.sub_state = UpdateSubState.CONNECTING
         self.force = kwargs.get('force', FORCE_UPDATE)
         self.controller.last_update_result = "CHECKING"
+        self.controller.last_update_error = None
+        self.connection_attempts = 0
+        self.connection_retry_time = None
         print("Starting update check...")
         self._fill_solid_color(self.COLORS['CONNECTING'])
         
@@ -1449,27 +1489,42 @@ class UpdateState(BaseState):
 
     def _handle_wifi_connection(self):
         """Handle WiFi connection attempt with animation."""
+        if self.connection_retry_time is not None:
+            if time.ticks_diff(time.ticks_ms(), self.connection_retry_time) < 1000:
+                return
+            self.connection_retry_time = None
         try:
             # Only try to connect if we haven't started yet
             if not hasattr(self, '_wifi_connection_started'):
                 self._wifi_connection_started = True
-                self._connection_start_time = time.ticks_ms()
+                self.connection_attempts += 1
                 
                 # Use shared WiFi connection start
                 success, message = WiFiManager.start_connection()
                 if not success:
                     raise Exception(message)
+                # Count association time after the driver reset has finished.
+                self._connection_start_time = time.ticks_ms()
             
             # Check connection status using shared function
             if WiFiManager.check_connection():
                 print("WiFi connected!")
                 delattr(self, '_wifi_connection_started')
                 self.sub_state = UpdateSubState.CHECKING
-            elif time.ticks_diff(time.ticks_ms(), self._connection_start_time) > WIFI_TIMEOUT_SECONDS * 1000:
+            elif time.ticks_diff(time.ticks_ms(), self._connection_start_time) >= UPDATE_WIFI_TIMEOUT_SECONDS * 1000:
                 raise Exception("WiFi connection timeout")
 
         except Exception as e:
-            self._handle_error("WiFi connection failed", e)
+            details = '{}; {}'.format(e, WiFiManager.connection_details())
+            if self.connection_attempts < 2:
+                print('WiFi attempt failed; resetting driver and retrying: ' + details)
+                WiFiManager.needs_radio_reset = True
+                WiFiManager.disconnect()
+                if hasattr(self, '_wifi_connection_started'):
+                    delattr(self, '_wifi_connection_started')
+                self.connection_retry_time = time.ticks_ms()
+            else:
+                self._handle_error("WiFi connection failed", details)
 
     def _handle_version_check(self):
         """Check for available updates."""
@@ -1638,6 +1693,7 @@ class UpdateState(BaseState):
         print(f"{message}: {error}")
         self.error = str(error)
         self.controller.last_update_result = "FAIL"
+        self.controller.last_update_error = '{}: {}'.format(message, error)
         self.sub_state = UpdateSubState.ERROR
         
         # Flash red 3 times
@@ -1815,6 +1871,7 @@ class StateController:
         self.update_schedule_date = None
         self.update_minute = None
         self.last_update_result = "NONE"
+        self.last_update_error = None
         self.last_friyay_check = time.ticks_ms()  # Add this line
 
     def get_status_snapshot(self):
@@ -1847,7 +1904,8 @@ class StateController:
         if not can_control:
             display = 'Finish the current device mode before changing office status.'
         return {'status': status, 'label': label, 'can_control': can_control,
-                'display': display, 'messages': self.get_debug_messages()}
+                'display': display, 'messages': self.get_debug_messages(),
+                'update_error': self.last_update_error}
 
     def set_office_status(self, status):
         if status not in DefaultSubState.BASE_CYCLE_STATES:

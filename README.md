@@ -181,12 +181,22 @@ but the popup depends on the phone, DNS settings, and MicroPython networking.
 Manual access to the AP address works without captive DNS. There is no internet
 connection, persistent settings editor, or file browser. Reading the page and
 changing office status write nothing to flash.
+
+If an update fails, the page also shows an **Update error** card containing the
+failure stage and error text. WiFi connection errors include the driver status,
+interface activity, and assigned IP captured before cleanup. Reopen the hotspot
+after a failure to read this information. It is held in RAM until another update
+attempt or reboot; it is not a persistent log.
 The whole page and server are embedded in `main.py`, so the existing OTA update
 flow includes them without any extra files.
 
 Routine time synchronization pauses while the hotspot is active and resumes
 when it closes. An already synchronized clock continues running. Scheduled and
 manual firmware updates take priority and close the hotspot before connecting.
+After hotspot use, the next station connection disables both WiFi interfaces and
+reinitializes the shared CYW43 driver before joining office WiFi. The updater allows
+30 seconds per connection attempt and retries once after a driver reset. If both
+attempts fail, it returns to the display without rebooting.
 Set `DEBUG_HOTSPOT_ENABLED = False` to keep diagnostics without a hotspot;
 `DEBUG_MODE = False` restores the original coffee triple-tap.
 
