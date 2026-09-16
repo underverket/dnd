@@ -60,7 +60,7 @@ FORCE_UPDATE = False  # Normal nightly checks only install newer firmware
 WIFI_TIMEOUT_SECONDS = 10    # Seconds to wait before timeout
 UPDATE_WIFI_TIMEOUT_SECONDS = 30  # Allow association and DHCP after AP mode
 WIFI_DISCONNECT_AFTER_USE = True  # Disconnect from WiFi after use
-CURRENT_VERSION = "1.0.27"
+CURRENT_VERSION = "1.0.28"
 GITHUB_USER = "underverket"
 GITHUB_REPO = "dnd"
 UPDATE_URL = f"http://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/firmware.json"
@@ -513,7 +513,9 @@ class DebugHotspot:
             self.error_stage = None
             return True
         except Exception as e:
-            self.error = str(e)
+            # Some exceptions (including MemoryError) have an empty message.
+            # Preserve a useful failure before shutdown touches the radio again.
+            self.error = str(e) or type(e).__name__
             print(f"Debug hotspot failed: {e}")
             self.stop()
             return False
@@ -1190,6 +1192,7 @@ class DiagnosticsState(BaseState):
         'UPDATE': (230, 70, 255),   # Last update result: purple
         'AP': (80, 100, 255),       # Test hotspot: blue
         'MP': (80, 100, 255),       # Runtime version when hotspot startup fails
+        'ERR': (255, 80, 40),       # Actual hotspot startup error
     }
     TIME_COLOR = (0, 220, 255)      # Weekday/time or unset clock: cyan
     WEEKDAYS = ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
@@ -1958,8 +1961,13 @@ class StateController:
         parts.append('UPDATE ' + self.last_update_result)
         if self.hotspot.is_active():
             parts.append('AP ' + self.hotspot.ssid)
-        elif self.hotspot.error:
+        elif self.hotspot.error is not None:
             parts.append('AP FAIL ' + (self.hotspot.error_stage or 'UNKNOWN'))
+            # The matrix font has no brackets or underscores. Keep error
+            # numbers and words, replacing unsupported punctuation with spaces.
+            detail = ''.join(ch if ch in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:-'
+                             else ' ' for ch in self.hotspot.error.upper())
+            parts.append('ERR ' + ' '.join(detail.split()))
             version = sys.implementation.version
             parts.append('MP {}.{}.{}'.format(version[0], version[1], version[2]))
         return parts

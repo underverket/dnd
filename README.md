@@ -154,8 +154,9 @@ also starts an open hotspot in the background:
   does not close the hotspot; starting a firmware update does.
 - **Matrix:** a blue `AP DND-...` message identifies the hotspot. If startup
   fails, it shows `AP FAIL CONFIG`, `AP FAIL RADIO`, or `AP FAIL ADDRESS`
-  (or `AP FAIL ID` for a device-ID error), followed by `MP x.y.z`, the
-  MicroPython runtime version. Send both messages when troubleshooting.
+  (or `AP FAIL ID` for a device-ID error), followed by an orange `ERR ...`
+  message with the actual error, and `MP x.y.z`, the MicroPython runtime
+  version. Send these messages when troubleshooting.
   The same `main.py` can run on different runtime versions; OTA updates here
   replace application code, not the underlying MicroPython firmware.
 
